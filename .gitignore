@@ -1,0 +1,5 @@
+*.jpg
+*.tar
+*.ipynb
+logs/
+__pycache__/

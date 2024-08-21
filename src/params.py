@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 import argparse
+import yaml
 from pathlib import Path
 
 def get_project_root():
@@ -28,6 +29,15 @@ def get_default_params(model_name):
         return {"lr": 5.0e-4, "beta1": 0.9, "beta2": 0.98, "eps": 1.0e-6}
     else:
         return {}
+    
+
+def parse_args_from_yaml(yaml_path):
+    with open(yaml_path, 'r') as file:
+        config = yaml.safe_load(file)
+
+    args = argparse.Namespace(**config)
+    
+    return args
 
 
 def parse_args():

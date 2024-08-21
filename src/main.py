@@ -18,6 +18,10 @@ from time import gmtime, strftime
 from pathlib import Path
 import json
 import wandb
+
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+
 import torch
 from torch import optim
 import torch.distributed as dist
@@ -30,7 +34,7 @@ from model.clip import _transform, load
 from model.model import convert_weights, CLIP, IM2TEXT
 from trainer import train
 from data import get_data
-from params import parse_args
+from params import parse_args, parse_args_from_yaml
 from logger import setup_primary_logging, setup_worker_logging
 from utils import is_master, convert_models_to_fp32
 import torchvision.transforms as T
@@ -248,9 +252,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
         wandb.finish()
 
 
-def main():
-    args = parse_args()
-
+def main(args):
     # get the name of the experiments
     if args.name is None:
         args.name = (f"lr={args.lr}_"
@@ -336,4 +338,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    config_path = "./configs/train.yml"
+    args = parse_args_from_yaml(config_path)
+    main(args)
