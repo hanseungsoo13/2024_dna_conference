@@ -39,6 +39,8 @@ from logger import setup_primary_logging, setup_worker_logging
 from utils import is_master, convert_models_to_fp32
 import torchvision.transforms as T
 
+import model.alpha_clip as alpha_clip
+
 def main_worker(gpu, ngpus_per_node, log_queue, args):
     args.gpu = gpu
     args.rank = gpu
@@ -53,79 +55,35 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
                 val = getattr(args, name)
                 logging.info(f"{name}: {val}")
                 f.write(f"{name}: {val}\n")
-            
-    if args.distributed:
-        dist.init_process_group(
-            backend=args.dist_backend,
-            init_method=args.dist_url,
-            world_size=args.world_size,
-            rank=args.rank,
-        )
-    
-    if args.dp:
-        args.batch_size *= args.world_size
 
     if args.gpu is not None:
         logging.info(f"Use GPU: {args.gpu} for training")
         torch.cuda.set_device(args.gpu)
 
-    # Do not use skip_reset unless you want to use on of the CLIP model
-    if args.openai_pretrained:
-        model, preprocess_train, preprocess_val = load(
-            args.model,
-            jit=False)
-    else:
-        model_config_file = Path(__file__).parent / f"model_configs/{args.model.replace('/', '-')}.json"
-        print('Loading model from', model_config_file)
-        assert os.path.exists(model_config_file)
-        with open(model_config_file, 'r') as f:
-            model_info = json.load(f)
-        if args.use_prefix:
-            model_info['vocab_size'] += 1
-            model_info['use_prefix'] = True
-        model = CLIP(**model_info)
-        convert_weights(model)        
-        preprocess_train = _transform(model.visual.input_resolution, is_train=True)
-        preprocess_val = _transform(model.visual.input_resolution, is_train=False)
-    try:
-        img2text = IM2TEXT(embed_dim=model.embed_dim, 
-                           middle_dim=args.middle_dim, 
-                           output_dim=model.token_embedding.weight.shape[1], 
-                           n_layer=args.n_layer)
-    except:
-        img2text = IM2TEXT(embed_dim=1024, output_dim=1024,
-        is_normalize=args.normalize_output, is_mlp=args.use_mlp, n_layer=args.n_layer)
+    # Load AlphaCLIP
+    model, preprocess = alpha_clip.load("ViT-L/14", device='cpu', 
+                                        alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
+                                        lora_adapt=False, rank=-1)
+    preprocess_train = preprocess
+    preprocess_val = preprocess
+
+    img2text = IM2TEXT(embed_dim=model.embed_dim, 
+                        middle_dim=args.middle_dim, 
+                        output_dim=model.token_embedding.weight.shape[1], 
+                        n_layer=args.n_layer)
 
     # See https://discuss.pytorch.org/t/valueerror-attemting-to-unscale-fp16-gradients/81372
     if args.precision == "amp" or args.precision == "fp32" or args.gpu is None:
         convert_models_to_fp32(model)
 
-    if not torch.cuda.is_available():
-        model.float()
-        img2text.float()
-        logging.warning("using CPU, this will be slow")
-    else:
-        model.cuda(args.gpu)
-        img2text.cuda(args.gpu)
-        if args.precision == "fp16":
-            convert_weights(model)
-            convert_weights(img2text)
-        # Previously batch size and workers were global and not per GPU.
-        # args.batch_size = args.batch_size / ngpus_per_node)
-        # args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
-
-        if args.distributed and args.use_bn_sync:
-            model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
-        if args.distributed:
-            model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=False)
-            img2text = torch.nn.parallel.DistributedDataParallel(img2text, device_ids=[args.gpu], find_unused_parameters=False)
-        if args.dp:
-            model = torch.nn.DataParallel(model, device_ids=args.multigpu)
-            img2text = torch.nn.DataParallel(img2text, device_ids=args.multigpu)
-
-        if args.precision == "fp16":
-            convert_weights(model)
-            convert_weights(img2text)
+    model.cuda(args.gpu)
+    img2text.cuda(args.gpu)
+    if args.precision == "fp16":
+        convert_weights(model)
+        convert_weights(img2text)
+    # Previously batch size and workers were global and not per GPU.
+    # args.batch_size = args.batch_size / ngpus_per_node)
+    # args.workers = int((args.workers + ngpus_per_node - 1) / ngpus_per_node)
 
     data = get_data(args, (preprocess_train, preprocess_val))
     exclude = lambda n : "bn" in n or "ln" in n or "bias" in n or 'logit_scale' in n
@@ -260,43 +218,9 @@ def main(args):
             f"agg={args.aggregate}_"
             f"model={args.model}_"
             f"batchsize={args.batch_size}_workers={args.workers}")
-        import pdb
-        pdb.set_trace
         if args.time_suffix:
             args.name += "_date=%Y-%m-%d-%H-%M-%S"
             args.name = strftime(args.name, gmtime())
-
-    if args.copy_codebase:
-        '''
-        For Testing
-        
-        해당 코드를 새로 생성한 뒤, 생성한 코드를 베이스로 실행
-        이는 여러 실험을 위한 코드이며, 실험의 안정성 및 재현성을 위함
-        
-        '''
-        import sys, subprocess
-        from shutil import copytree, ignore_patterns
-        new_code_path = os.path.join(args.logs, args.name, "code")
-        if os.path.exists(new_code_path):
-            print(
-                f"Error. Experiment already exists at {new_code_path}. Use --name to specify a new experiment."
-            )
-            return -1
-        print(f"Copying codebase to {new_code_path}")
-        current_code_path = os.path.realpath(__file__)
-        for _ in range(3):
-            current_code_path = os.path.dirname(current_code_path)
-        copytree(current_code_path, new_code_path, ignore=ignore_patterns('log', 'logs', 'wandb'))
-        print("Done copying code.")
-        os.environ["PYTHONPATH"] = f"{os.environ['PYTHONPATH']}:{os.path.join(new_code_path, 'src')}"
-        main_file = os.path.join(new_code_path, "src", "training", "main.py")
-        argv = sys.argv
-        argv.remove('--copy-codebase')
-        argv.extend(['--name', args.name])
-        command = [sys.executable] + argv
-        print("Executing command:", " ".join(command))
-        subprocess.check_call(command)
-        return 1
 
     args.log_path = os.path.join(args.logs, args.name, "out.log")
     if os.path.exists(args.log_path) and args.resume is None:
@@ -318,33 +242,23 @@ def main(args):
     for dirname in [args.tensorboard_path, args.checkpoint_path]:
         if dirname:
             os.makedirs(dirname, exist_ok=True)
-    
 
-    # Set multiprocessing type to spawn.
-    # This is important for logging to work with multiprocessing.
+    ## For Multiprocessing
     torch.multiprocessing.set_start_method("spawn")
 
     # Set logger
     args.log_level = logging.DEBUG if args.debug else logging.INFO
     log_queue = setup_primary_logging(args.log_path, args.log_level)
 
-    # Distributed training = training on more than one GPU.
-    # Also easily possible to extend to multiple nodes & multiple GPUs.
-    args.distributed = (args.gpu is None) and torch.cuda.is_available() and (not args.dp)
-    if args.distributed:
-        ngpus_per_node = torch.cuda.device_count()
-        args.world_size = ngpus_per_node
-        mp.spawn(main_worker, nprocs=ngpus_per_node, args=(ngpus_per_node, log_queue, args))
+    if args.dp:
+        args.gpu = args.multigpu[0]
+        args.world_size = len(args.multigpu)
     else:
-        if args.dp:
-            args.gpu = args.multigpu[0]
-            args.world_size = len(args.multigpu)
-        else:
-            args.world_size = 1
-        main_worker(args.gpu, None, log_queue, args)
+        args.world_size = 1
+    main_worker(args.gpu, None, log_queue, args)
 
 
 if __name__ == "__main__":
-    config_path = "./configs/train.yml"
+    config_path = "./configs/train_alphaclip.yml"
     args = parse_args_from_yaml(config_path)
     main(args)

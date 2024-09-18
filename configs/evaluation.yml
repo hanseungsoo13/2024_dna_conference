@@ -42,7 +42,7 @@ save_frequency: 1
 save_most_recent: false
 zeroshot_frequency: 2
 regression_frequency: 2
-resume: null
+resume: "auto"
 precision: "amp"   # ["amp", "fp16", "fp32"]
 model: "ViT-L/14"
 # ["RN50", "RN101", "RN50x4",  "RN50x64", "RN50x16", "ViT-B/16", "ViT-B/32", "ViT-L/14", "ViT-H-14", 

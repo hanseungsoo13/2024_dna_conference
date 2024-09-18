@@ -43,10 +43,12 @@ from params import parse_args, parse_args_from_yaml, get_project_root
 from logger import setup_primary_logging, setup_worker_logging
 from utils import is_master, convert_models_to_fp32, TargetPad
 
+import model.alpha_clip as alpha_clip
+
 def load_model(args):
-    model, _, preprocess_val = load(
-            args.model,
-            jit=False)
+    model, preprocess_val = alpha_clip.load("ViT-L/14", device='cpu', 
+                                        alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
+                                        lora_adapt=False, rank=-1)
     img2text = IM2TEXT(embed_dim=model.embed_dim, 
                        middle_dim=args.middle_dim, 
                        output_dim=model.token_embedding.weight.shape[1],

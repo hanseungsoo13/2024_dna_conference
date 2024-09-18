@@ -40,6 +40,10 @@ import torchvision.datasets as datasets
 import torchvision.transforms as T
 from third_party.open_clip.clip import tokenize
 
+from transformers import SamModel, SamProcessor, AutoProcessor, AutoModelForZeroShotObjectDetection
+from copy import deepcopy
+import torchvision
+
 
 ## Structure of dataset directory
 ## CIRR: under ./data/CIRR
@@ -393,6 +397,105 @@ class CsvDataset(Dataset):
         if self.return_data_identifier:
             return images, texts, 0
         return images, texts
+    
+
+class AlphaDataset(Dataset):
+    def __init__(self, input_filename, transforms, img_key, caption_key, sep="\t",
+                 return_data_identifier=False, return_filename=False):
+        logging.debug(f'Loading csv data from {input_filename}.')
+        df = pd.read_csv(input_filename, sep=sep)
+        self.images = df[img_key].tolist()
+        self.captions = df[caption_key].tolist()
+        self.transforms = transforms
+        self.return_data_identifier = return_data_identifier
+        logging.debug('Done loading data of {} samples'.format(len(self.images)))
+        self.return_filename = return_filename
+
+        self.device = "cuda:0"
+        self.dino_model, self.dino_processor = self.get_dino()
+        self.sam_model, self.sam_processor = self.get_sam()
+
+        self.mask_transform = torchvision.transforms.Compose([
+            torchvision.transforms.ToTensor(), 
+            torchvision.transforms.Resize((224, 224)),
+            torchvision.transforms.Normalize(0.5, 0.26)
+        ])
+
+
+    def __len__(self):
+        return len(self.captions)
+
+
+    def __getitem__(self, idx):
+        images = Image.open(str(self.images[idx]))
+        texts = str(self.captions[idx])
+
+        input_boxes = self.dino_process(images, texts)
+        image_maskes = self.sam_process(images, input_boxes)
+
+        images = self.transforms(images).to(self.device)
+
+        image_maskes = self.transforms.transforms[0](image_maskes)
+        image_maskes = self.transforms.transforms[1](image_maskes)
+        image_maskes = np.array(image_maskes)
+
+        binary_maskes = (image_maskes[:, :, 0] == 255)
+        alphas = self.mask_transform((binary_maskes * 255).astype(np.uint8))
+
+        return images, texts, alphas
+    
+
+    def get_dino(self):
+        model_id = "IDEA-Research/grounding-dino-tiny"
+
+        dino_processor = AutoProcessor.from_pretrained(model_id)
+        dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(self.device)
+
+        return dino_model, dino_processor
+    
+
+    def dino_process(self, images, texts):
+        inputs = self.dino_processor(images=images, text=texts, return_tensors='pt').to(self.device)
+        with torch.no_grad():
+            outputs = self.dino_model(**inputs)
+        
+        results = self.dino_processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            box_threshold=0.4,
+            text_threshold=0.3,
+            target_sizes=[images.size[::-1]]
+        )
+
+        return results[0]['boxes'].unsqueeze(0).cpu().numpy().tolist()
+    
+
+    def get_sam(self):
+        sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(self.device)
+        sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+
+        return sam_model, sam_processor
+    
+
+    def sam_process(self, images, input_boxes):
+        inputs = self.sam_processor(images, input_boxes=input_boxes, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.sam_model(**inputs)
+
+        masks = self.sam_processor.image_processor.post_process_masks(
+            outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu()
+        )
+
+        combined_mask = None
+        for mask in masks[0]:
+            new_mask = mask.float()
+            if combined_mask is None:
+                combined_mask = new_mask
+            else:
+                combined_mask = np.maximum(combined_mask, new_mask)
+        
+        return combined_mask
+
 
 @dataclass
 class DataInfo:
@@ -495,7 +598,36 @@ def get_csv_dataset(args, preprocess_fn, is_train, input_filename=None):
     return DataInfo(dataloader, sampler)
 
 
-#
+def get_alpha_dataset(args, preprocess_fn, is_train, input_filename=None):
+    if input_filename is None:
+        input_filename = args.train_data if is_train else args.val_data
+    assert input_filename
+    dataset = AlphaDataset(
+        input_filename,
+        preprocess_fn,
+        img_key=args.csv_img_key,
+        caption_key=args.csv_caption_key,
+        sep=args.csv_separator)
+        
+    num_samples = len(dataset)
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = num_samples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
+
 def get_imgnet_r(args, preprocess_fn, is_train, input_filename=None):
     if input_filename is None:
         input_filename = args.train_data if is_train else args.val_data
@@ -555,7 +687,9 @@ def get_dataset_fn(data_path, dataset_type):
     elif dataset_type == 'directory':
         return get_directory_dataset
     elif dataset_type == "csv":
-        return get_csv_dataset        
+        return get_csv_dataset  
+    elif dataset_type == 'alpha':
+        return get_alpha_dataset      
     elif dataset_type == "auto":
         ext = data_path.split('.')[-1]
         if ext in ['csv', 'tsv']:

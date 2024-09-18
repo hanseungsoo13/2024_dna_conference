@@ -14,6 +14,7 @@
 import argparse
 import yaml
 from pathlib import Path
+import torch
 
 def get_project_root():
     return Path(__file__).parent.parent
@@ -36,6 +37,8 @@ def parse_args_from_yaml(yaml_path):
         config = yaml.safe_load(file)
 
     args = argparse.Namespace(**config)
+
+    args.distributed = (args.gpu is None) and torch.cuda.is_available() and (not args.dp)
     
     return args
 

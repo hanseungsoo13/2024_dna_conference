@@ -99,9 +99,9 @@ def get_text_features(model, token_features, args):
     text_features = model.encode_text_img(text, token_features)
     return text_features
 
-def get_loss_img2text(model, img2text, images, loss_img, loss_txt, args, memory=None):
+def get_loss_img2text(model, img2text, images, alphas, loss_img, loss_txt, args, memory=None):
     with torch.no_grad():
-        image_features = model.encode_image(images)
+        image_features, _ = model.visual(images, alphas, return_attn=True)
     token_features = img2text(image_features)
     text_features = get_text_features(model, token_features, args)
     image_features = image_features / image_features.norm(dim=-1, keepdim=True)
@@ -178,7 +178,7 @@ def train(model, img2text, data, epoch, optimizer, scaler, scheduler, args, tb_w
 
         optimizer.zero_grad()
 
-        images, texts = batch[0], batch[1]
+        images, texts, alphas = batch[0], batch[1], batch[2]
         if len(batch) == 3 and args.use_debiased_sampler:
             data_identifier = torch.unique(batch[2])[0].numpy()
         else:
@@ -193,13 +193,13 @@ def train(model, img2text, data, epoch, optimizer, scaler, scheduler, args, tb_w
         # with automatic mixed precision.
         if args.precision == "amp":
             with autocast():
-                total_loss = get_loss_img2text(m, img2text, images, loss_img, loss_txt, args, data_identifier)
+                total_loss = get_loss_img2text(m, img2text, images, alphas, loss_img, loss_txt, args, data_identifier)
                 scaler.scale(total_loss).backward()
                 scaler.step(optimizer)
             scaler.update()
 
         else:
-            total_loss = get_loss_img2text(m, img2text, images, loss_img, loss_txt, args, data_identifier)
+            total_loss = get_loss_img2text(m, img2text, images, alphas, loss_img, loss_txt, args, data_identifier)
             total_loss.backward()
             optimizer.step()
 

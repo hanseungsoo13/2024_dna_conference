@@ -1,5 +1,11 @@
+## files
 *.jpg
 *.tar
 *.ipynb
+*.pt
+*.csv
+*.tsv
+
+## folder
 logs/
 __pycache__/
