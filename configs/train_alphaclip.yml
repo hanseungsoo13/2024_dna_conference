@@ -2,8 +2,8 @@
 
 # General parameters
 time_suffix: true
-train_data: './cc/dummy_val_data.csv'
-val_data: './cc/dummy_train_data.csv'   # 개수 issue (추후에 데이터셋 업데이트한 뒤 변경)
+train_data: './cc/GRIT_train_data.csv'
+val_data: './cc/GRIT_valid_data.csv'   # 개수 issue (추후에 데이터셋 업데이트한 뒤 변경)
 prompts: null
 retrieval_data: null
 demo_out: "demo"
@@ -15,8 +15,8 @@ eval_mode: "coco"   # ["coco", "cirr", "cirr_test", "fashion", "imgnet"]
 middle_dim: 512
 droprate: 0.1
 n_layer: 2
-dataset_type: "alpha"   # ["webdataset", "csv", "inet", "auto", "inet,csv", "csv,inet", "directory", "fashion-iq", "cirr", "imgnet_r"]
-dataset_type_val: "alpha"   # ["webdataset", "csv", "inet", "auto"]
+dataset_type: "grit"   # ["webdataset", "csv", "inet", "auto", "inet,csv", "csv,inet", "directory", "fashion-iq", "cirr", "imgnet_r"]
+dataset_type_val: "grit"   # ["webdataset", "csv", "inet", "auto"]
 csv_separator: "|"
 csv_img_key: "img_path"
 csv_caption_key: "caption"

@@ -44,6 +44,8 @@ from transformers import SamModel, SamProcessor, AutoProcessor, AutoModelForZero
 from copy import deepcopy
 import torchvision
 
+import requests
+
 
 ## Structure of dataset directory
 ## CIRR: under ./data/CIRR
@@ -399,6 +401,59 @@ class CsvDataset(Dataset):
         return images, texts
     
 
+class GRITDataset(Dataset):
+    def __init__(self, input_filename, transforms):
+        self.dataset = pd.read_csv(input_filename, sep='|')
+        self.transforms = transforms
+
+        device = 'cuda'
+        self.sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(device)
+        self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+    
+
+    def __len__(self):
+        return len(self.dataset)
+    
+
+    def __getitem__(self, idx):
+        data = self.dataset[idx]
+        image = Image.open(requests.get(data['url'], stream=True).raw)
+        caption = data['caption']
+        boxes = [float(i) for i in data['boxes'][1:-1].split(',')]
+        mask = self.get_masks(image, boxes, self.sam_processor, self.sam_model, self.device)
+
+        images = self.transforms(images).to(self.device)
+
+        mask = self.transforms.transforms[0](mask)
+        mask = self.transforms.transforms[1](mask)
+        mask = np.array(mask)
+
+        binary_maskes = (mask[:, :, 0] == 255)
+        alpha = self.mask_transform((binary_maskes * 255).astype(np.uint8))
+
+        return image, caption, alpha
+    
+
+    def get_masks(image, boxes, sam_processor, sam_model, device):
+        inputs = sam_processor(image, input_boxes=boxes, return_tensors="pt").to(device)
+        with torch.no_grad():
+            outputs = sam_model(**inputs)
+
+        masks = sam_processor.image_processor.post_process_masks(
+            outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu()
+        )
+
+        combined_mask = None
+        for mask in masks[0]:
+            new_mask = mask.float()
+            if combined_mask is None:
+                combined_mask = new_mask
+            else:
+                combined_mask = np.maximum(combined_mask, new_mask)
+
+        return combined_mask
+    
+
 class AlphaDataset(Dataset):
     def __init__(self, input_filename, transforms, img_key, caption_key, sep="\t",
                  return_data_identifier=False, return_filename=False):
@@ -628,6 +683,33 @@ def get_alpha_dataset(args, preprocess_fn, is_train, input_filename=None):
     return DataInfo(dataloader, sampler)
 
 
+def get_grit_dataset(args, preprocess_fn, is_train, input_filename=None):
+    if input_filename is None:
+        input_filename = args.train_data if is_train else args.val_data
+    assert input_filename
+    dataset = GRITDataset(
+        input_filename=input_filename,
+        transforms=preprocess_fn)
+        
+    num_samples = len(dataset)
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.workers,
+        pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+    )
+    dataloader.num_samples = num_samples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
+
 def get_imgnet_r(args, preprocess_fn, is_train, input_filename=None):
     if input_filename is None:
         input_filename = args.train_data if is_train else args.val_data
@@ -689,7 +771,9 @@ def get_dataset_fn(data_path, dataset_type):
     elif dataset_type == "csv":
         return get_csv_dataset  
     elif dataset_type == 'alpha':
-        return get_alpha_dataset      
+        return get_alpha_dataset 
+    elif dataset_type == 'grit':
+        return get_grit_dataset
     elif dataset_type == "auto":
         ext = data_path.split('.')[-1]
         if ext in ['csv', 'tsv']:
