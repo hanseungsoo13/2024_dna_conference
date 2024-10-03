@@ -34,6 +34,7 @@ import torch
 import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 from torch.utils.data.distributed import DistributedSampler
+from torch.utils.data.dataloader import default_collate
 import torchvision.datasets as datasets
 from torchvision.datasets.folder import DatasetFolder
 import torchvision.datasets as datasets
@@ -44,7 +45,9 @@ from transformers import SamModel, SamProcessor, AutoProcessor, AutoModelForZero
 from copy import deepcopy
 import torchvision
 
+from io import BytesIO
 import requests
+import PIL
 
 
 ## Structure of dataset directory
@@ -406,9 +409,15 @@ class GRITDataset(Dataset):
         self.dataset = pd.read_csv(input_filename, sep='|')
         self.transforms = transforms
 
-        device = 'cuda'
-        self.sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(device)
+        self.device = 'cuda'
+        self.sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(self.device)
         self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+
+        self.mask_transform = torchvision.transforms.Compose([
+            torchvision.transforms.ToTensor(), 
+            torchvision.transforms.Resize((224, 224)),
+            torchvision.transforms.Normalize(0.5, 0.26)
+        ])
     
 
     def __len__(self):
@@ -416,25 +425,65 @@ class GRITDataset(Dataset):
     
 
     def __getitem__(self, idx):
-        data = self.dataset[idx]
-        image = Image.open(requests.get(data['url'], stream=True).raw)
+        data = self.dataset.iloc[idx]
+
+        image = self.get_image(data['url'])
+        
+        if image is None:
+            return None
+        
         caption = data['caption']
-        boxes = [float(i) for i in data['boxes'][1:-1].split(',')]
+        boxes = [[[float(i) for i in data['boxes'][1:-1].split(',')]]]
         mask = self.get_masks(image, boxes, self.sam_processor, self.sam_model, self.device)
 
-        images = self.transforms(images).to(self.device)
+        image = self.transforms(image).to(self.device)
 
         mask = self.transforms.transforms[0](mask)
         mask = self.transforms.transforms[1](mask)
         mask = np.array(mask)
 
-        binary_maskes = (mask[:, :, 0] == 255)
+        binary_maskes = (mask[0, :, :] != 0)
         alpha = self.mask_transform((binary_maskes * 255).astype(np.uint8))
 
         return image, caption, alpha
     
 
-    def get_masks(image, boxes, sam_processor, sam_model, device):
+    def get_image(self, url):
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
+                        '(KHTML, like Gecko) Chrome/88.0.4324.96 Safari/537.36'
+        }
+
+        try:
+            response = requests.get(url, stream=True, timeout=10, headers=headers)
+            response.raise_for_status()
+
+            content_type = response.headers.get('Content-Type')
+
+            if content_type is None:
+                return None
+            
+            if 'image' not in content_type:
+                return None
+            
+            if not response.content:
+                return None
+
+            image = Image.open(BytesIO(response.content)).convert('RGB')
+
+            if image.width < 224 or image.height < 224:
+                return None
+            
+            return image
+        
+        except requests.exceptions.RequestException as e:
+            print(e)
+            return None
+        except (OSError, PIL.UnidentifiedImageError):
+            return None
+
+
+    def get_masks(self, image, boxes, sam_processor, sam_model, device):
         inputs = sam_processor(image, input_boxes=boxes, return_tensors="pt").to(device)
         with torch.no_grad():
             outputs = sam_model(**inputs)
@@ -683,6 +732,14 @@ def get_alpha_dataset(args, preprocess_fn, is_train, input_filename=None):
     return DataInfo(dataloader, sampler)
 
 
+def collate_fn_skip_none(batch):
+    # None 값을 필터링하여 배치 생성
+    batch = [item for item in batch if item     is not None]
+    if len(batch) == 0:
+        return None  # 모든 아이템이 None인 경우
+    return default_collate(batch)
+
+
 def get_grit_dataset(args, preprocess_fn, is_train, input_filename=None):
     if input_filename is None:
         input_filename = args.train_data if is_train else args.val_data
@@ -700,9 +757,10 @@ def get_grit_dataset(args, preprocess_fn, is_train, input_filename=None):
         batch_size=args.batch_size,
         shuffle=shuffle,
         num_workers=args.workers,
-        pin_memory=True,
+        # pin_memory=True,
         sampler=sampler,
         drop_last=is_train,
+        collate_fn=collate_fn_skip_none,
     )
     dataloader.num_samples = num_samples
     dataloader.num_batches = len(dataloader)

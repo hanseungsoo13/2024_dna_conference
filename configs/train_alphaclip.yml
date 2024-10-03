@@ -24,8 +24,8 @@ imagenet_val: null
 imagenet_v2: null
 logs: "./logs/"
 name: null
-workers: 8
-batch_size: 2
+workers: 0
+batch_size: 16
 epochs: 32
 lr: !!float 1e-4
 beta1: 0.0
@@ -65,3 +65,4 @@ debug: false
 copy_codebase: false
 dp: false
 multigpu: null
+world_size: 1

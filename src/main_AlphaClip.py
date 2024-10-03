@@ -230,7 +230,6 @@ def main(args):
         return -1
 
     assert args.precision in ['amp', 'fp16', 'fp32']
-    #assert args.model in ['RN50', 'RN101', 'RN50x4', 'ViT-B/32'] or os.path.exists(args.model)
 
     args.ngpus_per_node = torch.cuda.device_count()
 
@@ -250,12 +249,7 @@ def main(args):
     args.log_level = logging.DEBUG if args.debug else logging.INFO
     log_queue = setup_primary_logging(args.log_path, args.log_level)
 
-    if args.dp:
-        args.gpu = args.multigpu[0]
-        args.world_size = len(args.multigpu)
-    else:
-        args.world_size = 1
-    main_worker(args.gpu, None, log_queue, args)
+    main_worker(0, None, log_queue, args)
 
 
 if __name__ == "__main__":
