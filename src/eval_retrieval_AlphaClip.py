@@ -261,9 +261,9 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
     elif args.eval_mode == 'imgnet':
         domains = ['cartoon', 'origami', 'toy', 'sculpture']
         prompt = ["a {} of *".format(domain) for domain in domains]
-        source_path = os.path.join(root_project, "imgnet", "imgnet_real_query.txt")
+        source_path = os.path.join(root_project, "imgnet", "imgnet_real_query_alpha.txt")
         target_path = os.path.join(root_project, "imgnet", "imgnet_targets.txt")
-        source_dataset = ImageList(source_path, root=root_project, transforms=preprocess_val, is_labels=True)
+        source_dataset = ImageList(source_path, root=root_project, transforms=preprocess_val, is_labels=True, is_mask=True)
         target_dataset = ImageList(target_path, root=root_project, transforms=preprocess_val, is_labels=True)
         eval_func = evaluate_imgnet_retrieval
         source_dataloader = DataLoader(
@@ -285,6 +285,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
 def main(args):
 
     # get the name of the experiments
+    print(args.name)
     if args.name is None:
         args.name = (f"lr={args.lr}_"
             f"wd={args.wd}_"
@@ -320,7 +321,7 @@ def main(args):
         subprocess.check_call(command)
         return 1
 
-    args.log_path = os.path.join(args.logs, args.name, "out.log")
+    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_out.log")
     if os.path.exists(args.log_path) and args.resume is None:
         print(
             "Error. Experiment already exists. Use --name {} to specify a new experiment."
@@ -360,6 +361,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    config_path = "./configs/evaluation.yml"
+    config_path = "./configs/evaluation_imgnet.yml"
     args = parse_args_from_yaml(config_path)
     main(args)

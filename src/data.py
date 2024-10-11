@@ -49,6 +49,8 @@ from io import BytesIO
 import requests
 import PIL
 
+from imgnet_classes import IMAGENET2012_CLASSES
+
 
 ## Structure of dataset directory
 ## CIRR: under ./data/CIRR
@@ -299,11 +301,12 @@ class CsvCOCO(Dataset):
         
         ## extract query region.
         x1, y1, x2, y2 = self.regions[idx]        
-        region_image = image_masked.crop((x1, y1, x2, y2)) 
+        region_image = image_masked.crop((x1, y1, x2, y2))
 
         image = self.transforms(image)
         ## no cropping is applied to query region.
         region_image = self.transforms_region(region_image)
+        mask_tensor = (region_image > 0).to(torch.uint8)[0].unsqueeze(0).to(torch.float)
         query_class = self.query_classes[idx]
         other_classes = self.classes[idx]        
         text_with_blank = 'a photo of * and {}'.format(" and ".join(other_classes))
@@ -314,23 +317,30 @@ class CsvCOCO(Dataset):
         text_with_blank = tokenize(text_with_blank)[0]
         text_with_queryclass = tokenize(text_with_queryclass)[0]
         text_full = tokenize(text_full)[0]
-        return image, region_image, text_full, text_with_blank, \
+        return image, region_image, mask_tensor, text_full, text_with_blank, \
             text_with_queryclass, str(self.images[idx]), raw_text
 
 
 class ImageList(Dataset):
     def __init__(self, input_filename, transforms, root=None, 
-                 return_filename=False, is_labels=False):
+                 return_filename=False, is_labels=False, is_mask=False):
         logging.debug(f'Loading txt data from {input_filename}.')
         with open(input_filename, 'r') as f:
             lines = f.readlines()
         if not is_labels:
             self.images = [line.strip() for line in lines]
+        elif not is_mask:
+            filenames = [line.strip() for line in lines]
+            self.images = [name.split(" ")[0] for name in filenames] 
+            self.labels = [int(name.split(" ")[1]) for name in filenames]
         else:
             filenames = [line.strip() for line in lines]
             self.images = [name.split(" ")[0] for name in filenames] 
-            self.labels = [int(name.split(" ")[1]) for name in filenames] 
+            self.alphas = [name.split(" ")[1] for name in filenames] 
+            self.labels = [int(name.split(" ")[2]) for name in filenames]
+        
         self.is_labels = is_labels
+        self.is_mask = is_mask
         self.transforms = transforms
         self.root = root
         logging.debug('Done loading data.')
@@ -344,9 +354,17 @@ class ImageList(Dataset):
             img_path = os.path.join(self.root, str(self.images[idx]))
         else:
             img_path = str(self.images[idx])
+        
+        if self.is_mask:
+            alpha_path = os.path.join(self.root, str(self.alphas[idx]))
+            alphas = self.transforms(Image.open(alpha_path))
+
         images = self.transforms(Image.open(img_path))
         if self.return_filename:
             return images, img_path
+        elif self.is_mask:
+            target = self.labels[idx]
+            return images, alphas, target
         elif self.is_labels:
             target = self.labels[idx]
             return images, target       
@@ -410,8 +428,8 @@ class GRITDataset(Dataset):
         self.transforms = transforms
 
         self.device = 'cuda'
-        self.sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(self.device)
-        self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+        self.sam_model = SamModel.from_pretrained("facebook/sam-vit-base").to(self.device)
+        self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
 
         self.mask_transform = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(), 
@@ -427,9 +445,8 @@ class GRITDataset(Dataset):
     def __getitem__(self, idx):
         data = self.dataset.iloc[idx]
 
-        image = self.get_image(data['url'])
-        
-        if image is None:
+        image = Image.open(data['url']).convert("RGB")
+        if image.width < 224 or image.height < 224:
             return None
         
         caption = data['caption']
@@ -446,41 +463,6 @@ class GRITDataset(Dataset):
         alpha = self.mask_transform((binary_maskes * 255).astype(np.uint8))
 
         return image, caption, alpha
-    
-
-    def get_image(self, url):
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 '
-                        '(KHTML, like Gecko) Chrome/88.0.4324.96 Safari/537.36'
-        }
-
-        try:
-            response = requests.get(url, stream=True, timeout=10, headers=headers)
-            response.raise_for_status()
-
-            content_type = response.headers.get('Content-Type')
-
-            if content_type is None:
-                return None
-            
-            if 'image' not in content_type:
-                return None
-            
-            if not response.content:
-                return None
-
-            image = Image.open(BytesIO(response.content)).convert('RGB')
-
-            if image.width < 224 or image.height < 224:
-                return None
-            
-            return image
-        
-        except requests.exceptions.RequestException as e:
-            print(e)
-            return None
-        except (OSError, PIL.UnidentifiedImageError):
-            return None
 
 
     def get_masks(self, image, boxes, sam_processor, sam_model, device):

@@ -1,5 +1,7 @@
 ## files
 *.jpg
+*.JPEG
+*.png
 *.tar
 *.ipynb
 *.pt

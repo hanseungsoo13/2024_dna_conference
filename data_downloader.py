@@ -1,11 +1,14 @@
-from datasets import load_dataset
 import pandas as pd
 from tqdm import tqdm
 from multiprocessing import Pool
 import itertools
+import json
+import os
 
-def process_data(data):
-    url = data['url']
+def process_data(json_file):
+    data = json.load(open(os.path.join('/home/work/gisub_conference/real_data/json', json_file)))
+    url = json_file.split('.')[0] + '.jpg'
+    image = '/home/work/gisub_conference/real_data/images/' + url
     boxes = data['ref_exps']
     caption = data['caption']
     height, width = data['height'], data['width']
@@ -17,16 +20,16 @@ def process_data(data):
         x_max = chunk[4] * width
         y_max = chunk[5] * height
         box = (x_min, y_min, x_max, y_max)
-        noun = 'a photo of a ' + caption[int(chunk[0]):int(chunk[1])]
-        results.append([url, box, noun])
+        noun = 'a photo of ' + caption[int(chunk[0]):int(chunk[1])]
+        results.append([image, box, noun])
     
     return results
 
-ds = load_dataset("zzliang/GRIT")
-all_data = pd.DataFrame(columns=['url', 'boxes', 'caption'])
+json_list = sorted(os.listdir('/home/work/gisub_conference/real_data/json/'))
+all_data = pd.DataFrame(columns=['image', 'boxes', 'caption'])
 
 with Pool() as pool:
-    results = list(tqdm(pool.imap(process_data, ds['train']), total=len(ds['train'])))
+    results = list(tqdm(pool.imap(process_data, json_list), total=len(json_list)))
 
 # 결과를 10개의 구간으로 나눠서 데이터프레임 생성
 num_chunks = 10
