@@ -32,13 +32,92 @@ from third_party.open_clip.clip import tokenize, _transform
 import pickle
 
 from utils import is_master
+from transformers import SamModel, SamProcessor, AutoProcessor, AutoModelForZeroShotObjectDetection
+import torchvision
+
+class SegmentImage():
+    def __init__(self):
+        self.device = "cuda:0"
+        self.dino_model, self.dino_processor = self.get_dino()
+        self.sam_model, self.sam_processor = self.get_sam()
+
+        self.mask_transform = torchvision.transforms.Compose([
+            torchvision.transforms.ToTensor(), 
+            torchvision.transforms.Resize((224, 224)),
+            torchvision.transforms.Normalize(0.5, 0.26)
+        ])
+
+    def __len__(self):
+        return len(self.captions)
+
+    def transform(self, image_path, text):
+        image = Image.open(image_path)
+        input_boxes = self.dino_process(image, text)
+        image_maskes = self.sam_process(image, input_boxes)
+
+        image_maskes = np.array(image_maskes)
+
+        binary_maskes = (image_maskes[:, :, 0] == 255)
+        alphas = self.mask_transform((binary_maskes * 255).astype(np.uint8))
+
+        return alphas
+
+    def get_dino(self):
+        model_id = "IDEA-Research/grounding-dino-tiny"
+
+        dino_processor = AutoProcessor.from_pretrained(model_id)
+        dino_model = AutoModelForZeroShotObjectDetection.from_pretrained(model_id).to(self.device)
+
+        return dino_model, dino_processor
+
+    def dino_process(self, images, texts):
+        inputs = self.dino_processor(images=images, text=texts, return_tensors='pt').to(self.device)
+        with torch.no_grad():
+            outputs = self.dino_model(**inputs)
+        
+        results = self.dino_processor.post_process_grounded_object_detection(
+            outputs,
+            inputs.input_ids,
+            box_threshold=0.4,
+            text_threshold=0.3,
+            target_sizes=[images.size[::-1]]
+        )
+
+        return results[0]['boxes'].unsqueeze(0).cpu().numpy().tolist()
+
+    def get_sam(self):
+        sam_model = SamModel.from_pretrained("facebook/sam-vit-huge").to(self.device)
+        sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-huge")
+
+        return sam_model, sam_processor
+
+    def sam_process(self, images, input_boxes):
+        inputs = self.sam_processor(images, input_boxes=input_boxes, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            outputs = self.sam_model(**inputs)
+
+        masks = self.sam_processor.image_processor.post_process_masks(
+            outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu()
+        )
+
+        combined_mask = None
+        for mask in masks[0]:
+            new_mask = mask.float()
+            if combined_mask is None:
+                combined_mask = new_mask
+            else:
+                combined_mask = np.maximum(combined_mask, new_mask)
+        
+        return combined_mask
+
 
 def prepare_img(img_file, transform):
     return transform(Image.open(img_file))
 
 def visualize_results(model, img2text, args, prompt, dataloader):        
     model.eval()
-    img2text.eval()   
+    img2text.eval()
+    segment_model = SegmentImage()  
     if not os.path.exists(args.demo_out):
         os.makedirs(args.demo_out)        
     if not os.path.exists(os.path.join(args.demo_out, "images")):
@@ -66,9 +145,11 @@ def visualize_results(model, img2text, args, prompt, dataloader):
         with torch.no_grad():
             for batch in tqdm(dataloader):
                 images, filenames = batch
+                alphas = torch.ones_like(images[:, :1, :, :])
                 if args.gpu is not None:
                     images = images.cuda(args.gpu, non_blocking=True)
-                image_features = m.encode_image(images)           
+                    alphas = alphas.cuda(args.gpu, non_blocking=True)
+                image_features, _ = m.visual(images, alphas, return_attn=True)         
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True) 
                 all_image_features.append(image_features)
                 for name in filenames:
@@ -86,9 +167,11 @@ def visualize_results(model, img2text, args, prompt, dataloader):
         logging.info("retrieve image of {}".format(query))
         transform = _transform(model.visual.input_resolution)
         query_img = prepare_img(query, transform)
-        query_img = torch.unsqueeze(query_img, 0)    
+        query_img = torch.unsqueeze(query_img, 0)
+        mask_img = segment_model.transform(query, args.prompts_to_query)  
         query_img = query_img.cuda(args.gpu, non_blocking=True)
-        img_feature = m.encode_image(query_img) 
+        mask_img = mask_img.cuda(args.gpu, non_blocking=True)
+        img_feature, _ = m.visual(query_img, mask_img, return_attn=True)
         query_img_feature = img2text(img_feature)
         composed_feature = m.encode_text_img_vis(text, query_img_feature, split_ind=id_split)
         composed_feature = composed_feature / composed_feature.norm(dim=-1, keepdim=True)
@@ -149,7 +232,8 @@ def evaluate_imgnet_retrieval(model, img2text, args, prompt, query_loader, targe
                 images = images.cuda(args.gpu, non_blocking=True)
                 labels = labels.cuda(args.gpu, non_blocking=True)
                 alphas = alphas.cuda(args.gpu, non_blocking=True)
-            image_features, _ = model.visual(images, alphas, return_attn=True)
+            image_features, _ = m.visual(images, alphas, return_attn=True)
+            # image_features = m.encode_image(images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)            
             all_image_features.append(image_features)
             all_target_labels.append(labels)
@@ -182,7 +266,8 @@ def evaluate_imgnet_retrieval(model, img2text, args, prompt, query_loader, targe
                     alphas = alphas.cuda(args.gpu, non_blocking=True)
                 ## Label is decided by class label and images' domain
                 labels += n_class * p_ind
-                image_features, _ = model.visual(images, alphas, return_attn=True)
+                # image_features, _ = m.visual(images, alphas, return_attn=True)
+                image_features = m.encode_image(images)
                  ## Composed feature extraction
                 image_features_query = img2text(image_features)                      
                 composed_feature = m.encode_text_img_retrieval(text, image_features_query, split_ind=id_split)                            

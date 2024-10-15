@@ -515,6 +515,35 @@ class CLIP(nn.Module):
         # take features from the eot embedding (eot_token is the highest number in each sequence)    
         x = x[torch.arange(x.size(0)), collect_ind+1] @ self.text_projection
         return x
+
+    def encode_text_img_vis(self, text, img_tokens, split_ind=4):
+        x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
+        collect_ind = text == self.end_id 
+        collect_ind = collect_ind.nonzero()[:, 1]
+        new_x = []
+        for i, sample in enumerate(x):
+            ind_insert = text[i] == split_ind
+            sample = sample.view(1, x.size(1), -1)            
+            if isinstance(img_tokens, tuple):
+                indexes = ind_insert.nonzero()
+                for i, index in enumerate(indexes):
+                    img = img_tokens[i].view(1, 1, -1)
+                    sample = torch.cat([sample[:, :index], img, sample[:, index+1:]], dim=1)
+            else:
+                img_tokens = img_tokens.view(1, 1, -1)
+                ind_insert = ind_insert.nonzero()[0]
+                sample = torch.cat([sample[:, :ind_insert], img_tokens, sample[:, ind_insert+1:]], dim=1)                
+            new_x.append(sample)
+        x = torch.cat(new_x, dim=0)
+        x = x + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype)
+        # x.shape = [batch_size, n_ctx, transformer.width]
+        # take features from the eot embedding (eot_token is the highest number in each sequence)    
+        x = x[torch.arange(x.size(0)), collect_ind] @ self.text_projection
+        return x
     
     def encode_text_img_retrieval(self, text, img_tokens, split_ind=4, repeat=True):
         # text.shape = [1, n_ctx]

@@ -11,3 +11,5 @@
 ## folder
 logs/
 __pycache__/
+demo/
+data/

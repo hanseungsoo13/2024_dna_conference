@@ -358,6 +358,7 @@ class ImageList(Dataset):
         if self.is_mask:
             alpha_path = os.path.join(self.root, str(self.alphas[idx]))
             alphas = self.transforms(Image.open(alpha_path))
+            alphas = alphas[0, :, :].unsqueeze(0)
 
         images = self.transforms(Image.open(img_path))
         if self.return_filename:
