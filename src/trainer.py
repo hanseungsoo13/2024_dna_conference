@@ -99,6 +99,16 @@ def get_text_features(model, token_features, args):
     text_features = model.encode_text_img(text, token_features)
     return text_features
 
+def get_text_features_add_caption(model, token_features, texts, args):
+    text = tokenize("a photo of")
+    caption = tokenize(["that " + t for t in texts])
+    text = text.cuda(args.gpu, non_blocking=True)
+    caption = caption.cuda(args.gpu, non_blocking=True)
+    text = text.view(1, -1)
+    text = text.repeat(token_features.size(0), 1)
+    text_features = model.encode_text_img(text, token_features, caption)
+    return text_features
+
 def get_text_features_alpha(model, texts, token_features, args):
     texts = tokenize(texts)
     texts = texts.cuda(args.gpu, non_blocking=True)
@@ -109,7 +119,8 @@ def get_loss_img2text(model, img2text, images, texts, alphas, loss_img, loss_txt
     with torch.no_grad():
         image_features, _ = model.visual(images, alphas, return_attn=True)
     token_features = img2text(image_features)
-    text_features = get_text_features(model, token_features, args)
+    # text_features = get_text_features(model, token_features, args)  # default option
+    text_features = get_text_features_add_caption(model, token_features, texts, args)
     # text_features = get_text_features_alpha(model, texts, token_features, args)
     image_features = image_features / image_features.norm(dim=-1, keepdim=True)
     text_features = text_features / text_features.norm(dim=-1, keepdim=True)    

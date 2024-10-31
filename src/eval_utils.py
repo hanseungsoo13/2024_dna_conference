@@ -321,17 +321,19 @@ def evaluate_coco(model, img2text, args, loader):
     logit_scale = logit_scale.mean()
     with torch.no_grad():
         for batch in tqdm(loader):
-            images, region_images, alphas, text_full, text_with_blank, text_with_blank_query, filename, raw_text = batch            
+            images, region_images, alphas, text_full, text_with_blank, text_with_blank_query, filename, raw_text = batch   
+            full_alphas = torch.ones_like(images[:, :1, :, :])         
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
                 region_images = region_images.cuda(args.gpu, non_blocking=True)
                 alphas = alphas.cuda(args.gpu, non_blocking=True)
+                full_alphas = full_alphas.cuda(args.gpu, non_blocking=True)
                 text_full = text_full.cuda(args.gpu, non_blocking=True)
                 text_with_blank = text_with_blank.cuda(args.gpu, non_blocking=True)
                 text_with_blank_query = text_with_blank_query.cuda(args.gpu, non_blocking=True)
 
             ## Target image features 
-            image_features, _ = m.visual(images, alphas, return_attn=True)             
+            image_features, _ = m.visual(images, full_alphas, return_attn=True)     
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)  
             id_split = tokenize(["*"])[0][1]
             ## Composed image features

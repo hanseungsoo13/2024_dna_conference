@@ -499,13 +499,14 @@ class CLIP(nn.Module):
 
         return x
     
-    def encode_text_img(self, text, img_tokens):
+    def encode_text_img(self, text, img_tokens, caption):
         b_size = img_tokens.size(0)
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
-        collect_ind = text == self.end_id 
+        x_cap = self.token_embedding(caption).type(self.dtype)
+        collect_ind = text == self.end_id
         collect_ind = collect_ind.nonzero()[:, 1]
         img_tokens = img_tokens.view(b_size, 1, -1)
-        x = torch.cat([x[:, :collect_ind[0]], img_tokens, x[:, collect_ind[0]:-1]], dim=1)
+        x = torch.cat([x[:, :collect_ind[0]], img_tokens, x_cap[:, :-(collect_ind[0]+1)]], dim=1)
         x = x + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
