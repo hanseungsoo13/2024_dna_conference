@@ -266,8 +266,8 @@ def evaluate_imgnet_retrieval(model, img2text, args, prompt, query_loader, targe
                     alphas = alphas.cuda(args.gpu, non_blocking=True)
                 ## Label is decided by class label and images' domain
                 labels += n_class * p_ind
-                # image_features, _ = m.visual(images, alphas, return_attn=True)
-                image_features = m.encode_image(images)
+                image_features, _ = m.visual(images, alphas, return_attn=True)
+                # image_features = m.encode_image(images)
                  ## Composed feature extraction
                 image_features_query = img2text(image_features)                      
                 composed_feature = m.encode_text_img_retrieval(text, image_features_query, split_ind=id_split)                            

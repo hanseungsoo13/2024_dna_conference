@@ -321,7 +321,7 @@ def main(args):
         subprocess.check_call(command)
         return 1
 
-    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_clip_out.log")
+    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_out.log")
     if os.path.exists(args.log_path) and args.resume is None:
         print(
             "Error. Experiment already exists. Use --name {} to specify a new experiment."
@@ -361,6 +361,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    config_path = "./configs/evaluation_coco.yml"
+    config_path = "./configs/evaluation_imgnet.yml"
     args = parse_args_from_yaml(config_path)
     main(args)

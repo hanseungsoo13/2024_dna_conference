@@ -23,7 +23,7 @@ csv_caption_key: "caption"
 imagenet_val: null
 imagenet_v2: null
 logs: "./logs/"
-name: "lr=0.0001_wd=0.2_agg=True_model=ViT-L/14_batchsize=32_workers=0_date=2024-11-04-15-27-56/"
+name: "pic2word/"
 workers: 0
 batch_size: 32
 epochs: 30

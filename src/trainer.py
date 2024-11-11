@@ -115,15 +115,24 @@ def get_text_features_alpha(model, texts, token_features, args):
     text_features = model.encode_text_img(texts, token_features)
     return text_features
 
+def get_text_features_only_caption(model, texts, args):
+    texts = tokenize(texts)
+    texts = texts.cuda(args.gpu, non_blocking=True)
+    text_features = model.encode_text(texts)
+    return text_features
+
 def get_loss_img2text(model, img2text, images, texts, alphas, loss_img, loss_txt, args, memory=None):
     with torch.no_grad():
         image_features, _ = model.visual(images, alphas, return_attn=True)
     token_features = img2text(image_features)
     # text_features = get_text_features(model, token_features, args)  # default option
-    text_features = get_text_features_add_caption(model, token_features, texts, args)
+    new_image_features = get_text_features(model, token_features, args)   # test code
+    text_features = get_text_features_only_caption(model, texts, args)   # test code
+    # text_features = get_text_features_add_caption(model, token_features, texts, args)
     # text_features = get_text_features_alpha(model, texts, token_features, args)
-    image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-    text_features = text_features / text_features.norm(dim=-1, keepdim=True)    
+    # image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+    new_image_featrues = new_image_features / new_image_features.norm(dim=-1, keepdim=True)   # test code
+    text_features = text_features / text_features.norm(dim=-1, keepdim=True)   
     logit_scale = model.logit_scale.exp()
     logit_scale = logit_scale.mean()
     if args.distributed and args.aggregate:
@@ -131,17 +140,26 @@ def get_loss_img2text(model, img2text, images, texts, alphas, loss_img, loss_txt
         rank = dist.get_rank()
 
         # We gather tensors from all gpus to get more negatives to contrast with.
+        # gathered_image_features = [
+        #     torch.zeros_like(image_features) for _ in range(world_size)
+        # ]
         gathered_image_features = [
-            torch.zeros_like(image_features) for _ in range(world_size)
+            torch.zeros_like(new_image_features) for _ in range(world_size)   # test code
         ]
         gathered_text_features = [
             torch.zeros_like(text_features) for _ in range(world_size)
         ]
-        dist.all_gather(gathered_image_features, image_features)
+        # dist.all_gather(gathered_image_features, image_features)
+        dist.all_gather(gathered_image_features, new_image_features)   # test code
         dist.all_gather(gathered_text_features, text_features)
 
+        # all_image_features = torch.cat(
+        #     [image_features]
+        #     + gathered_image_features[:rank]
+        #     + gathered_image_features[rank + 1 :]
+        # )
         all_image_features = torch.cat(
-            [image_features]
+            [new_image_features]    # test code
             + gathered_image_features[:rank]
             + gathered_image_features[rank + 1 :]
         )
@@ -162,13 +180,16 @@ def get_loss_img2text(model, img2text, images, texts, alphas, loss_img, loss_txt
         logits_per_text = logits_per_image.t()
         loss_txt_val = loss_txt(logits_per_text, ground_truth)
     else:
-        ground_truth = torch.arange(len(image_features)).long()
+        # ground_truth = torch.arange(len(image_features)).long()
+        ground_truth = torch.arange(len(new_image_features)).long()   # test code
         if args.gpu is not None:
             ground_truth = ground_truth.cuda(args.gpu, non_blocking=True)
         # Image loss.
-        logits_per_image = logit_scale * image_features @ text_features.t()
+        # logits_per_image = logit_scale * image_features @ text_features.t()
+        logits_per_image = logit_scale * new_image_features @ text_features.t()   # test code
         loss_img_val = loss_img(logits_per_image, ground_truth)
-        logits_per_text = logit_scale * text_features @ image_features.t()
+        # logits_per_text = logit_scale * text_features @ image_features.t()
+        logits_per_text = logit_scale * text_features @ new_image_features.t()   # test code
         loss_txt_val = loss_txt(logits_per_text, ground_truth)
     total_loss = (loss_img_val + loss_txt_val) / 2
     return total_loss
