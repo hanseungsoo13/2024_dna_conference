@@ -445,8 +445,8 @@ class GRITDataset(Dataset):
 
     def __getitem__(self, idx):
         data = self.dataset.iloc[idx]
-
-        image = Image.open(data['url']).convert("RGB")
+        data_dir = '/home/hanseungsoo/project/2024_DnA_Conference/2024_dna_conference/real_data/images/'
+        image = Image.open(data_dir + data['url'].split('/')[-1]).convert("RGB")
         if image.width < 224 or image.height < 224:
             return None
         

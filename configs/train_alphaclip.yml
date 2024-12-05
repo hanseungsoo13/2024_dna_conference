@@ -26,23 +26,24 @@ logs: "./logs/"
 name: null
 workers: 0
 batch_size: 32
-epochs: 30
+epochs: 20
 lr: !!float 1e-4
 beta1: 0.0
 beta2: 0.99
 eps: !!float 1e-9
 wd: 0.2
-warmup: 10000
+warmup: 2000
 use_bn_sync: false
 use_debiased_sampler: false
 use_prefix: false
 gpu: 0
 skip_scheduler: false
-save_frequency: 1
+save_log: True
+save_frequency: 1 
 save_most_recent: false
 zeroshot_frequency: 2
 regression_frequency: 2
-resume: null
+resume: '/home/hanseungsoo/project/2024_DnA_/home/hanseungsoo/project/2024_DnA_Conference/2024_dna_conference/logs/lr=0.0001_wd=0.2_agg=True_model=ViT-L/14_batchsize=32_workers=0_date=2024-11-20-16-44-01/checkpoints/epoch_17.pt'
 precision: "amp"   # ["amp", "fp16", "fp32"]
 model: "ViT-L/14"
 # ["RN50", "RN101", "RN50x4",  "RN50x64", "RN50x16", "ViT-B/16", "ViT-B/32", "ViT-L/14", "ViT-H-14", 

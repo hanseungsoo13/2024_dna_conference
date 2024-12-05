@@ -36,7 +36,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from model.clip import _transform, load
-from model.model import convert_weights, CLIP, IM2TEXT
+from model.model import convert_weights, CLIP, IM2TEXT, IM_TRANSFORMER
 from eval_utils import evaluate_imgnet_retrieval, evaluate_coco, evaluate_fashion, evaluate_cirr, evaluate_cirr_test
 from data import CsvDataset, CustomFolder, ImageList, CsvCOCO, FashionIQ, CIRR
 from params import parse_args, parse_args_from_yaml, get_project_root
@@ -49,10 +49,13 @@ def load_model(args):
     model, preprocess_val = alpha_clip.load("ViT-L/14", device='cpu', 
                                         alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
                                         lora_adapt=False, rank=-1)
-    img2text = IM2TEXT(embed_dim=model.embed_dim, 
+    img2text = IM_TRANSFORMER(num_query_token=1,
+                            cross_attention_freq=2,
+                            embed_dim=model.token_embedding.weight.shape[1])
+    '''img2text = IM2TEXT(embed_dim=model.embed_dim, 
                        middle_dim=args.middle_dim, 
                        output_dim=model.token_embedding.weight.shape[1],
-                       n_layer=args.n_layer) 
+                       n_layer=args.n_layer) '''
     # See https://discuss.pytorch.org/t/valueerror-attemting-to-unscale-fp16-gradients/81372
     if args.precision == "amp" or args.precision == "fp32" or args.gpu is None:
         convert_models_to_fp32(model)
@@ -321,7 +324,7 @@ def main(args):
         subprocess.check_call(command)
         return 1
 
-    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_clip_out.log")
+    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_out.log")
     if os.path.exists(args.log_path) and args.resume is None:
         print(
             "Error. Experiment already exists. Use --name {} to specify a new experiment."
@@ -361,6 +364,6 @@ def main(args):
 
 
 if __name__ == "__main__":
-    config_path = "./configs/evaluation_coco.yml"
+    config_path = "./configs/evaluation_imgnet.yml"
     args = parse_args_from_yaml(config_path)
     main(args)

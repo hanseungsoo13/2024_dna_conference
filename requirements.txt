@@ -50,3 +50,6 @@ hydra-core
 omegaconf
 fairseq==0.10.0
 bitarray
+pycocotools
+transformers
+loralib

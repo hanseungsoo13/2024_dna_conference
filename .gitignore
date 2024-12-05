@@ -7,9 +7,13 @@
 *.pt
 *.csv
 *.tsv
+*.gz
+*.pth
 
 ## folder
 logs/
 __pycache__/
 demo/
 data/
+real_data/
+checkpoints/

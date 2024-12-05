@@ -365,7 +365,7 @@ class VisionTransformer(nn.Module):
             x = self.transformer(x, return_attn=False)
         x = x.permute(1, 0, 2)  # LND -> NLD
 
-        x = self.ln_post(x[:, 0, :])
+        x = self.ln_post(x[:, 0, :]) #
 
         if self.proj is not None:
             x = x @ self.proj
@@ -499,14 +499,13 @@ class CLIP(nn.Module):
 
         return x
     
-    def encode_text_img(self, text, img_tokens, caption):
+    def encode_text_img(self, text, img_tokens):
         b_size = img_tokens.size(0)
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
-        x_cap = self.token_embedding(caption).type(self.dtype)
-        collect_ind = text == self.end_id
+        collect_ind = text == self.end_id 
         collect_ind = collect_ind.nonzero()[:, 1]
         img_tokens = img_tokens.view(b_size, 1, -1)
-        x = torch.cat([x[:, :collect_ind[0]], img_tokens, x_cap[:, :-(collect_ind[0]+1)]], dim=1)
+        x = torch.cat([x[:, :collect_ind[0]], img_tokens, x[:, collect_ind[0]:-1]], dim=1)
         x = x + self.positional_embedding.type(self.dtype)
         x = x.permute(1, 0, 2)  # NLD -> LND
         x = self.transformer(x)
@@ -515,7 +514,7 @@ class CLIP(nn.Module):
         # x.shape = [batch_size, n_ctx, transformer.width]
         # take features from the eot embedding (eot_token is the highest number in each sequence)    
         x = x[torch.arange(x.size(0)), collect_ind+1] @ self.text_projection
-        return x
+        return x              
 
     def encode_text_img_vis(self, text, img_tokens, split_ind=4):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]

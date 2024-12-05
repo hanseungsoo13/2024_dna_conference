@@ -91,10 +91,9 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
         img2text = IM2TEXT(embed_dim=model.embed_dim, 
                            middle_dim=args.middle_dim, 
                            output_dim=model.token_embedding.weight.shape[1], 
-                           n_layer=args.n_layer)
+                            )
     except:
-        img2text = IM2TEXT(embed_dim=1024, output_dim=1024,
-        is_normalize=args.normalize_output, is_mlp=args.use_mlp, n_layer=args.n_layer)
+        img2text = IM2TEXT(embed_dim=1024, output_dim=1024)
 
     # See https://discuss.pytorch.org/t/valueerror-attemting-to-unscale-fp16-gradients/81372
     if args.precision == "amp" or args.precision == "fp32" or args.gpu is None:

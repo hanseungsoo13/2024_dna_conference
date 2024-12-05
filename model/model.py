@@ -23,6 +23,69 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import torch.distributed as dist
+from typing import List, Optional, Tuple, Union, Dict, Any, Sequence, Callable, cast, MutableMapping
+from transformers import BertConfig, BertLMHeadModel, BertTokenizer
+
+class IM_TRANSFORMER(nn.Module):
+    def __init__(self,num_query_token=32,
+                    cross_attention_freq=2,
+                    vision_width=768,
+                    embed_dim=512):
+        super().__init__()
+        self.tokenizer = self.init_tokenizer()
+
+        self.Qformer, self.query_tokens = self.init_Qformer(
+            num_query_token, vision_width, cross_attention_freq
+        )
+        self.Qformer.resize_token_embeddings(len(self.tokenizer))
+        state_dict = self.Qformer.state_dict()
+        for name, param in self.Qformer.named_parameters():
+            if "_query" in name:
+                key_orig = name.replace("_query", "")
+                param.data.copy_(state_dict[key_orig])
+        
+        self.vision_proj = nn.Linear(self.Qformer.config.hidden_size, embed_dim)
+    
+    def init_tokenizer(self,truncation_side="right"):
+        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased", truncation_side=truncation_side)
+        tokenizer.add_special_tokens({"bos_token": "[DEC]"})
+        return tokenizer
+    
+    def init_Qformer(self,num_query_token, vision_width, cross_attention_freq):
+        encoder_config = BertConfig.from_pretrained("bert-base-uncased")
+        encoder_config.encoder_width = vision_width
+        # insert cross-attention layer every other block
+        encoder_config.add_cross_attention = True
+        encoder_config.is_decoder=True
+        encoder_config.cross_attention_freq = cross_attention_freq
+        encoder_config.query_length = num_query_token
+        Qformer = BertLMHeadModel.from_pretrained(
+            "bert-base-uncased", config=encoder_config
+        )
+        query_tokens = nn.Parameter(
+            torch.zeros(1, num_query_token, encoder_config.hidden_size)
+        )
+        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
+        return Qformer, query_tokens
+    
+    def forward(self,  x: torch.Tensor):
+        image_embeds = x
+        image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to('cuda')
+        query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+
+        #print(query_tokens.shape, image_embeds.shape, image_atts.shape)
+        query_output = self.Qformer.bert(
+            inputs_embeds=query_tokens,
+            encoder_hidden_states=image_embeds,
+            encoder_attention_mask=image_atts,
+            use_cache=True,
+            return_dict=True,
+        )
+        image_feats = F.normalize(
+            self.vision_proj(query_output.last_hidden_state), dim=-1
+        )
+        return image_feats
+
 
 class IM2TEXT(nn.Module):
     def __init__(self, embed_dim=512, middle_dim=512, output_dim=512, n_layer=2, dropout=0.1):
