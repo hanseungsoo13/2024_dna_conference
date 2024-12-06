@@ -19,9 +19,15 @@
 <br/>
 
 ## 3. Model FLow
+### Model Architecture
 
+![image](https://github.com/user-attachments/assets/d23a0e13-55e4-4bc1-8293-5477a8e963ed)
 
-(이미지 추가 예정)
+### Training flow
+
+<img src = https://github.com/user-attachments/assets/549a6592-859d-46e5-a90b-41488295356d width=800>
+![스크린샷 2024-12-06 135421]()
+
 
 
 
@@ -39,6 +45,7 @@
 | Segment-Image              | 13.89 | 21.93 | 25.83 |
 | Segment-Text               | 7.72  | 20.97 | 30.14 |
 | **Segment-Image + Text**   | **17.23** | 28.75 | 35.13 |
+
 
 - ImageNet-S
   
