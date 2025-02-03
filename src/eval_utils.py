@@ -37,7 +37,7 @@ import torchvision
 
 class SegmentImage():
     def __init__(self):
-        self.device = "cuda:0"
+        self.device = "cuda:1"
         self.dino_model, self.dino_processor = self.get_dino()
         self.sam_model, self.sam_processor = self.get_sam()
 
@@ -52,12 +52,13 @@ class SegmentImage():
 
     def transform(self, image_path, text):
         image = Image.open(image_path)
+
         input_boxes = self.dino_process(image, text)
         image_maskes = self.sam_process(image, input_boxes)
 
         image_maskes = np.array(image_maskes)
 
-        binary_maskes = (image_maskes[:, :, 0] == 255)
+        binary_maskes = (image_maskes[0, :, :] == 1)
         alphas = self.mask_transform((binary_maskes * 255).astype(np.uint8))
 
         return alphas
@@ -114,8 +115,9 @@ class SegmentImage():
 def prepare_img(img_file, transform):
     return transform(Image.open(img_file))
 
-def visualize_results(model, img2text, args, prompt, dataloader):        
+def visualize_results(model, model_clip, img2text, args, prompt, dataloader):        
     model.eval()
+    model_clip.eval()
     img2text.eval()
     segment_model = SegmentImage()  
     if not os.path.exists(args.demo_out):
@@ -132,6 +134,7 @@ def visualize_results(model, img2text, args, prompt, dataloader):
     text = text.cuda(args.gpu, non_blocking=True)    
     all_image_features, all_image_filenames = [], []
     m = model.module if args.distributed or args.dp else model
+    m_c = model_clip.module if args.distributed or args.dp else model_clip
     query_file = args.query_file
     path_save = os.path.join("./data", args.retrieval_data.split('/')[-1].split('.')[0]+".pkl")
     if os.path.exists(path_save):
@@ -145,11 +148,9 @@ def visualize_results(model, img2text, args, prompt, dataloader):
         with torch.no_grad():
             for batch in tqdm(dataloader):
                 images, filenames = batch
-                alphas = torch.ones_like(images[:, :1, :, :])
                 if args.gpu is not None:
                     images = images.cuda(args.gpu, non_blocking=True)
-                    alphas = alphas.cuda(args.gpu, non_blocking=True)
-                image_features, _ = m.visual(images, alphas, return_attn=True)         
+                image_features = m_c.encode_image(images)         
                 image_features = image_features / image_features.norm(dim=-1, keepdim=True) 
                 all_image_features.append(image_features)
                 for name in filenames:
@@ -162,6 +163,7 @@ def visualize_results(model, img2text, args, prompt, dataloader):
                 pickle.dump(dict_save,f)
     f = open(os.path.join(args.demo_out, "index.html"), 'w')
     html_txt = """"""
+    to_pil = torchvision.transforms.ToPILImage()
     ## For each domain, compute composed features and evaluate.
     for query in query_file.split(","):        
         logging.info("retrieve image of {}".format(query))
@@ -169,10 +171,16 @@ def visualize_results(model, img2text, args, prompt, dataloader):
         query_img = prepare_img(query, transform)
         query_img = torch.unsqueeze(query_img, 0)
         mask_img = segment_model.transform(query, args.prompts_to_query)  
+        
+        # h, w = query_img.shape[-2:]
+        # mask_img = np.ones((h, w), dtype=np.uint8) * 255
+        # mask_img = Image.fromarray(mask_img)
+        # mask_img = segment_model.mask_transform(mask_img)
+
         query_img = query_img.cuda(args.gpu, non_blocking=True)
         mask_img = mask_img.cuda(args.gpu, non_blocking=True)
         img_feature, _ = m.visual(query_img, mask_img, return_attn=True)
-        query_img_feature = img2text(img_feature)
+        query_img_feature = img2text(img_feature.unsqueeze(1))
         composed_feature = m.encode_text_img_vis(text, query_img_feature, split_ind=id_split)
         composed_feature = composed_feature / composed_feature.norm(dim=-1, keepdim=True)
         img_feature = img_feature / img_feature.norm(dim=-1, keepdim=True)
@@ -188,6 +196,8 @@ def visualize_results(model, img2text, args, prompt, dataloader):
         image_paths = [[all_image_filenames[ind] for j, ind in enumerate(indices[i][:8])] 
                         for i, caption in enumerate(prompt)]
         html_txt += make_html(prompt, query, image_paths, args.demo_out)
+        mask_image = to_pil(mask_img)
+        mask_image.save(os.path.join(args.demo_out, "images", "mask_"+query.split("/")[-1]))
     f.write(html_txt)
 
 def make_html(prompts, query_image, images, path_html):
@@ -213,27 +223,26 @@ def make_html(prompts, query_image, images, path_html):
     #f.write(html_all)
 
 
-def evaluate_imgnet_retrieval(model, img2text, args, prompt, query_loader, target_loader):
+def evaluate_imgnet_retrieval(model, model_clip, img2text, args, prompt, query_loader, target_loader):
     if not is_master(args):
         return
     model.eval()
+    model_clip.eval()
     img2text.eval()
     all_image_features = []  
     all_target_labels = []      
     m = model.module if args.distributed or args.dp else model
+    m_c = model_clip.module if args.distributed or args.dp else model_clip
     n_class = 1000
    
     with torch.no_grad():
         ## Extract target image features. 
         for batch in tqdm(target_loader):
             images, labels = batch
-            alphas = torch.ones_like(images[:, :1, :, :])
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
                 labels = labels.cuda(args.gpu, non_blocking=True)
-                alphas = alphas.cuda(args.gpu, non_blocking=True)
-            image_features, _ = m.visual(images, alphas, return_attn=True)
-            # image_features = m.encode_image(images)
+            image_features = m_c.encode_image(images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)            
             all_image_features.append(image_features)
             all_target_labels.append(labels)
@@ -269,7 +278,7 @@ def evaluate_imgnet_retrieval(model, img2text, args, prompt, query_loader, targe
                 image_features, _ = m.visual(images, alphas, return_attn=True)
                 # image_features = m.encode_image(images)
                  ## Composed feature extraction
-                image_features_query = img2text(image_features)                      
+                image_features_query = img2text(image_features.unsqueeze(1)) #unsqueeze for transformer                      
                 composed_feature = m.encode_text_img_retrieval(text, image_features_query, split_ind=id_split)                            
                 composed_feature = composed_feature / composed_feature.norm(dim=-1, keepdim=True)            
                 ## Image feature only
@@ -304,10 +313,11 @@ def evaluate_imgnet_retrieval(model, img2text, args, prompt, query_loader, targe
     return metrics
 
 
-def evaluate_coco(model, img2text, args, loader):
+def evaluate_coco(model, model_clip, img2text, args, loader):
     if not is_master(args):
         return
     model.eval()
+    model_clip.eval()
     img2text.eval()
 
     all_image_features = []  
@@ -317,28 +327,27 @@ def evaluate_coco(model, img2text, args, loader):
     all_text_full_features = [] 
 
     m = model.module if args.distributed or args.dp else model
+    m_c = model_clip.module if args.distributed or args.dp else model_clip
     logit_scale = m.logit_scale.exp()
     logit_scale = logit_scale.mean()
     with torch.no_grad():
         for batch in tqdm(loader):
             images, region_images, alphas, text_full, text_with_blank, text_with_blank_query, filename, raw_text = batch   
-            full_alphas = torch.ones_like(images[:, :1, :, :])         
             if args.gpu is not None:
                 images = images.cuda(args.gpu, non_blocking=True)
                 region_images = region_images.cuda(args.gpu, non_blocking=True)
                 alphas = alphas.cuda(args.gpu, non_blocking=True)
-                full_alphas = full_alphas.cuda(args.gpu, non_blocking=True)
                 text_full = text_full.cuda(args.gpu, non_blocking=True)
                 text_with_blank = text_with_blank.cuda(args.gpu, non_blocking=True)
                 text_with_blank_query = text_with_blank_query.cuda(args.gpu, non_blocking=True)
 
             ## Target image features 
-            image_features, _ = m.visual(images, full_alphas, return_attn=True)     
+            image_features = m_c.encode_image(images)    
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)  
             id_split = tokenize(["*"])[0][1]
             ## Composed image features
             query_image_features, _ = m.visual(region_images, alphas, return_attn=True) 
-            query_image_tokens = img2text(query_image_features)          
+            query_image_tokens = img2text(query_image_features.unsqueeze(1)) #transform for transformer          
             composed_feature_with_class = m.encode_text_img_retrieval(text_with_blank_query, query_image_tokens, split_ind=id_split, repeat=False)                        
             composed_feature_with_class = composed_feature_with_class / composed_feature_with_class.norm(dim=-1, keepdim=True)        
             ## Text only features

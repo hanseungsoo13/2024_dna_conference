@@ -20,13 +20,14 @@ def process_data(json_file):
         x_max = chunk[4] * width
         y_max = chunk[5] * height
         box = (x_min, y_min, x_max, y_max)
-        noun = 'a photo of ' + caption[int(chunk[0]):int(chunk[1])]
-        results.append([image, box, noun])
+        noun = caption[int(chunk[0]):int(chunk[1])]
+        caption_exp_noun = caption[:int(chunk[0])] + ' <tok> ' + caption[int(chunk[1])+1:]
+        results.append([image, box, noun, caption_exp_noun])
     
     return results
 
 json_list = sorted(os.listdir('/home/work/gisub_conference/real_data/json/'))
-all_data = pd.DataFrame(columns=['image', 'boxes', 'caption'])
+all_data = pd.DataFrame(columns=['image', 'boxes', 'noun', 'caption'])
 
 with Pool() as pool:
     results = list(tqdm(pool.imap(process_data, json_list), total=len(json_list)))
@@ -38,14 +39,14 @@ chunk_size = len(results) // num_chunks
 for i in tqdm(range(num_chunks)):
     chunk_results = results[i * chunk_size:(i + 1) * chunk_size]
     chunk_results = list(itertools.chain.from_iterable(chunk_results))
-    chunk_data = pd.DataFrame(chunk_results, columns=['url', 'boxes', 'caption'])
+    chunk_data = pd.DataFrame(chunk_results, columns=['url', 'boxes', 'noun', 'caption'])
     chunk_data.to_csv(f'./cc/GRIT_data_chunk_{i + 1}.csv', sep='|', index=False)
 
 # 마지막 남은 데이터 처리
 remaining_results = results[num_chunks * chunk_size:]
 if remaining_results:
     remaining_results = list(itertools.chain.from_iterable(remaining_results))
-    chunk_data = pd.DataFrame(remaining_results, columns=['url', 'boxes', 'caption'])
+    chunk_data = pd.DataFrame(remaining_results, columns=['url', 'boxes', 'noun', 'caption'])
     chunk_data.to_csv(f'./cc/GRIT_data_chunk_{num_chunks + 1}.csv', sep='|', index=False)
 
 import gc
@@ -72,6 +73,6 @@ test_data = remaining_data.drop(valid_data.index)
 
 print('Start saving data...')
 
-train_data.to_csv('./cc/GRIT_train_data.csv', sep='|', index=False)
-valid_data.to_csv('./cc/GRIT_valid_data.csv', sep='|', index=False)
-test_data.to_csv('./cc/GRIT_test_data.csv', sep='|', index=False)
+train_data.to_csv('./cc/GRIT_caption_train_data.csv', sep='|', index=False)
+valid_data.to_csv('./cc/GRIT_caption_valid_data.csv', sep='|', index=False)
+test_data.to_csv('./cc/GRIT_caption_test_data.csv', sep='|', index=False)

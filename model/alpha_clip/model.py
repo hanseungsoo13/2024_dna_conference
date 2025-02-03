@@ -516,6 +516,86 @@ class CLIP(nn.Module):
         x = x[torch.arange(x.size(0)), collect_ind+1] @ self.text_projection
         return x  
 
+    # def encode_text_img_cap(self, text, img_tokens, caption):  ## for a photo of <caption + [img]>
+    #     b_size = img_tokens.size(0)           
+    #     x = self.token_embedding(text).type(self.dtype)
+    #     cap_x = self.token_embedding(caption).type(self.dtype)
+        
+    #     collect_ind = (text == self.end_id).nonzero()[:, 1]
+    #     noun_start_ind = (caption == 283).nonzero()[:, 1]
+    #     noun_end_ind = (caption == 285).nonzero()[:, 1]
+    #     noun_collect_ind = (caption == self.end_id).nonzero()[:, 1]
+        
+    #     img_tokens = img_tokens.view(b_size, 1, -1)
+        
+    #     concatenated_x = []
+    #     for idx in range(b_size):
+    #         tmp_x = torch.cat([
+    #             x[idx, :collect_ind[idx]], 
+    #             cap_x[idx, 1:noun_start_ind[idx]], 
+    #             img_tokens[idx], 
+    #             cap_x[idx, noun_end_ind[idx]+1:noun_collect_ind[idx]+1]
+    #         ], dim=0)
+            
+    #         pad_length = 77 - tmp_x.shape[0]
+    #         if pad_length < 0:
+    #             tmp_x = tmp_x[:77, :]
+    #             tmp_x[-1] = x[idx, collect_ind[idx]]
+    #         if pad_length > 0:
+    #             tmp_x = torch.cat([tmp_x, x[idx,-1].repeat(pad_length, 1)], dim=0)
+            
+    #         concatenated_x.append(tmp_x.unsqueeze(0))
+
+    #     x = torch.cat(concatenated_x, dim=0)
+    #     x = x + self.positional_embedding.type(self.dtype)
+    #     x = x.permute(1, 0, 2)  # NLD -> LND
+    #     x = self.transformer(x)
+    #     x = x.permute(1, 0, 2)  # LND -> NLD
+    #     x = self.ln_final(x).type(self.dtype)
+        
+    #     # Ensure collect_ind+1 is within bounds
+    #     if torch.any(collect_ind + 1 >= x.size(1)):
+    #         raise ValueError("End token index out of bounds")
+            
+    #     x = x[torch.arange(x.size(0)), collect_ind+1] @ self.text_projection
+    #     return x
+
+    def encode_text_img_cap(self, text, img_tokens, caption):   ## for a photo of [img] <noun>
+        b_size = img_tokens.size(0)           
+        x = self.token_embedding(text).type(self.dtype)
+        cap_x = self.token_embedding(caption).type(self.dtype)
+        
+        collect_ind = (caption == self.end_id).nonzero()[:, 1]
+        
+        img_tokens = img_tokens.view(b_size, 1, -1)
+        
+        concatenated_x = []
+        for idx in range(b_size):
+            tmp_x = torch.cat([
+                x[idx, :5], 
+                img_tokens[idx],
+                cap_x[idx, 1:collect_ind[idx]+1]
+            ], dim=0)
+
+            pad_length = 77 - tmp_x.shape[0]
+            if pad_length < 0:
+                tmp_x = tmp_x[:77, :]
+                tmp_x[-1] = cap_x[idx, collect_ind[idx]]
+            elif pad_length > 0:
+                tmp_x = torch.cat([tmp_x, x[idx,-1].repeat(pad_length, 1)], dim=0)
+            
+            concatenated_x.append(tmp_x.unsqueeze(0))
+                
+        x = torch.cat(concatenated_x, dim=0)
+        x = x + self.positional_embedding.type(self.dtype)
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = self.ln_final(x).type(self.dtype)
+            
+        x = x[torch.arange(x.size(0)), collect_ind+1] @ self.text_projection
+        return x
+
     def encode_text_img_vis(self, text, img_tokens, split_ind=4):
         x = self.token_embedding(text).type(self.dtype)  # [batch_size, n_ctx, d_model]
         collect_ind = text == self.end_id 

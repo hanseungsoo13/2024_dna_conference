@@ -322,7 +322,7 @@ class CsvCOCO(Dataset):
 
 
 class ImageList(Dataset):
-    def __init__(self, input_filename, transforms, root=None, 
+    def __init__(self, input_filename, transforms, transforms_mask=None, root=None, 
                  return_filename=False, is_labels=False, is_mask=False):
         logging.debug(f'Loading txt data from {input_filename}.')
         with open(input_filename, 'r') as f:
@@ -338,6 +338,7 @@ class ImageList(Dataset):
             self.images = [name.split(" ")[0] for name in filenames] 
             self.alphas = [name.split(" ")[1] for name in filenames] 
             self.labels = [int(name.split(" ")[2]) for name in filenames]
+            self.transforms_mask = transforms_mask
         
         self.is_labels = is_labels
         self.is_mask = is_mask
@@ -357,7 +358,7 @@ class ImageList(Dataset):
         
         if self.is_mask:
             alpha_path = os.path.join(self.root, str(self.alphas[idx]))
-            alphas = self.transforms(Image.open(alpha_path))
+            alphas = self.transforms_mask(Image.open(alpha_path))
             alphas = alphas[0, :, :].unsqueeze(0)
 
         images = self.transforms(Image.open(img_path))
@@ -717,7 +718,7 @@ def get_alpha_dataset(args, preprocess_fn, is_train, input_filename=None):
 
 def collate_fn_skip_none(batch):
     # None 값을 필터링하여 배치 생성
-    batch = [item for item in batch if item     is not None]
+    batch = [item for item in batch if item is not None]
     if len(batch) == 0:
         return None  # 모든 아이템이 None인 경우
     return default_collate(batch)

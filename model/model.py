@@ -23,6 +23,120 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 import torch.distributed as dist
+from transformers import BertConfig, BertLMHeadModel, BertTokenizer #Qformer 구조를 Bert에서 차용
+
+#Projection module transformer 버전
+class IM_TRANSFORMER(nn.Module):
+    def __init__(self,num_query_token=32,
+                    cross_attention_freq=2,
+                    vision_width=768,
+                    embed_dim=512):
+        super().__init__()
+        self.tokenizer = self.init_tokenizer()
+
+        self.Qformer, self.query_tokens = self.init_Qformer(
+            num_query_token, vision_width, cross_attention_freq
+        )
+        self.Qformer.resize_token_embeddings(len(self.tokenizer))
+        state_dict = self.Qformer.state_dict()
+        for name, param in self.Qformer.named_parameters():
+            if "_query" in name:
+                key_orig = name.replace("_query", "")
+                param.data.copy_(state_dict[key_orig])
+        
+        self.vision_proj = nn.Linear(self.Qformer.config.hidden_size, embed_dim)
+    
+    def init_tokenizer(self,truncation_side="right"):
+        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased", truncation_side=truncation_side)
+        tokenizer.add_special_tokens({"bos_token": "[DEC]"})
+        return tokenizer
+    
+    def init_Qformer(self,num_query_token, vision_width, cross_attention_freq):
+        encoder_config = BertConfig.from_pretrained("bert-base-uncased")
+        encoder_config.encoder_width = vision_width
+        # insert cross-attention layer every other block
+        encoder_config.add_cross_attention = True
+        encoder_config.is_decoder=True
+        encoder_config.cross_attention_freq = cross_attention_freq
+        encoder_config.query_length = num_query_token
+        Qformer = BertLMHeadModel.from_pretrained(
+            "bert-base-uncased", config=encoder_config
+        )
+        query_tokens = nn.Parameter(
+            torch.zeros(1, num_query_token, encoder_config.hidden_size)
+        )
+        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
+        return Qformer, query_tokens
+    
+    def forward(self,  x: torch.Tensor):
+        image_embeds = x
+        image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to('cuda')
+        query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+
+        #print(query_tokens.shape, image_embeds.shape, image_atts.shape)
+        query_output = self.Qformer.bert(
+            inputs_embeds=query_tokens,
+            encoder_hidden_states=image_embeds,
+            encoder_attention_mask=image_atts,
+            use_cache=True,
+            return_dict=True,
+        )
+        image_feats = F.normalize(
+            self.vision_proj(query_output.last_hidden_state), dim=-1
+        )
+        return image_feats
+
+
+class FiLMGenerator(nn.Module):
+    """Generate FiLM parameters gamma and beta from conditioning input"""
+    def __init__(self, condition_dim, n_film_params):
+        super().__init__()
+        # condition_dim: dimension of conditioning input (e.g. question embedding)
+        # n_film_params: number of FiLM parameters to generate (2 * num_features)
+        
+        self.film_generator = nn.Sequential(
+            nn.Linear(condition_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, n_film_params)
+        )
+    
+    def forward(self, condition):
+        film_params = self.film_generator(condition)
+        # Split parameters into gamma and beta
+        gamma, beta = torch.chunk(film_params, 2, dim=-1)
+        # Add 1 to gamma (γ = 1 + Δγ as mentioned in paper)
+        return gamma + 1, beta
+
+
+class FiLMedIM2TEXT(nn.Module):
+    def __init__(self, embed_dim=512, middle_dim=512, output_dim=768, n_layer=2, dropout=0.1):
+        super().__init__()
+
+        layers = []
+        dim = embed_dim
+        for _ in range(n_layer - 1):
+            block = []
+            block.append(nn.Linear(dim, middle_dim))
+            block.append(nn.Dropout(dropout))
+            block.append(nn.ReLU())            
+            dim = middle_dim
+            layers.append(nn.Sequential(*block))        
+        self.layers = nn.Sequential(*layers)
+
+        self.film_generator = FiLMGenerator(embed_dim, 2 * middle_dim)
+
+        self.fc_out = nn.Linear(middle_dim, output_dim)
+        
+    def forward(self, x: torch.Tensor):
+        condition = x
+
+        for layer in self.layers:
+            x = layer(x)
+
+        gamma, beta = self.film_generator(condition)
+        x = gamma * x + beta
+
+        return self.fc_out(x)
 
 class IM2TEXT(nn.Module):
     def __init__(self, embed_dim=512, middle_dim=512, output_dim=512, n_layer=2, dropout=0.1):

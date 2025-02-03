@@ -15,18 +15,28 @@ sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 import model.alpha_clip as alpha_clip
 from model.clip import _transform, load
-from model.model import convert_weights, IM2TEXT
+from model.model import convert_weights, IM2TEXT, FiLMedIM2TEXT, IM_TRANSFORMER
 from params import parse_args_from_yaml
 from utils import convert_models_to_fp32
 
 def load_model_alphaclip(args):
-    model, preprocess_val = alpha_clip.load("ViT-L/14", device='cuda', 
+    model, preprocess_val = alpha_clip.load("ViT-L/14", device=args.gpu, 
                                         alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
                                         lora_adapt=False, rank=-1)
+    
     img2text = IM2TEXT(embed_dim=model.embed_dim, 
                        middle_dim=args.middle_dim, 
                        output_dim=model.token_embedding.weight.shape[1],
-                       n_layer=args.n_layer) 
+                       n_layer=args.n_layer)
+
+    # img2text = FiLMedIM2TEXT(embed_dim=model.embed_dim, 
+    #                         middle_dim=args.middle_dim, 
+    #                         output_dim=model.token_embedding.weight.shape[1],
+    #                         n_layer=args.n_layer) 
+
+    # img2text = IM_TRANSFORMER(num_query_token=1,
+    #                         cross_attention_freq=2,
+    #                         embed_dim=model.token_embedding.weight.shape[1])
 
     if args.precision == "amp" or args.precision == "fp32" or args.gpu is None:
         convert_models_to_fp32(model)
@@ -214,7 +224,7 @@ def plot_similarity_heatmap(similarity_matrix, class_list, metric_name="Cosine S
     plt.ylabel('Classes')
     plt.xticks(rotation=45)
     plt.tight_layout()
-    plt.savefig(f'base_similarity_heatmap_{metric_name.lower().replace(" ", "_")}.png')
+    plt.savefig(f'QFormer_30_similarity_heatmap_{metric_name.lower().replace(" ", "_")}.png')
     plt.close()
 
 if __name__ == "__main__":

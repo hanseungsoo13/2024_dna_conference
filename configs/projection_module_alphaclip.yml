@@ -23,7 +23,7 @@ csv_caption_key: "caption"
 imagenet_val: null
 imagenet_v2: null
 logs: "./logs/"
-name: "lr=0.0001_wd=0.2_agg=True_model=ViT-L/14_batchsize=32_workers=0_date=2024-10-04-12-46-24/"
+name: "lr=0.0001_wd=0.2_agg=True_model=ViT-L/14_batchsize=32_workers=0_date=2024-11-24-05-59-36"
 workers: 0
 batch_size: 32
 epochs: 30
@@ -36,7 +36,7 @@ warmup: 10000
 use_bn_sync: false
 use_debiased_sampler: false
 use_prefix: false
-gpu: 0
+gpu: 1
 skip_scheduler: false
 save_frequency: 1
 save_most_recent: false

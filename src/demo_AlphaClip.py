@@ -28,7 +28,7 @@ import sys
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
 from model.clip import _transform, load
-from model.model import convert_weights, CLIP, IM2TEXT
+from model.model import convert_weights, CLIP, IM2TEXT, IM_TRANSFORMER
 from eval_utils import visualize_results
 from data import get_data, CsvDataset, CustomFolder, CIRR, FashionIQ, ImageList
 from params import parse_args, parse_args_from_yaml, get_project_root
@@ -88,13 +88,22 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
     model, preprocess = alpha_clip.load("ViT-L/14", device='cpu', 
                                         alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
                                         lora_adapt=False, rank=-1)
+    
+    model_clip, _, preprocess_clip = load(
+            args.model,
+            jit=False)
+
     preprocess_train = preprocess
     preprocess_val = preprocess
-    img2text = IM2TEXT(embed_dim=model.embed_dim, output_dim=model.token_embedding.weight.shape[1])
+    # img2text = IM2TEXT(embed_dim=model.embed_dim, output_dim=model.token_embedding.weight.shape[1])
+    img2text = IM_TRANSFORMER(num_query_token=1,
+                            cross_attention_freq=2,
+                            embed_dim=model.token_embedding.weight.shape[1])
 
     # See https://discuss.pytorch.org/t/valueerror-attemting-to-unscale-fp16-gradients/81372
     if args.precision == "amp" or args.precision == "fp32" or args.gpu is None:
         convert_models_to_fp32(model)
+        convert_models_to_fp32(model_clip)
 
     if not torch.cuda.is_available():
         model.float()
@@ -102,9 +111,11 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
         logging.warning("using CPU, this will be slow")
     else:
         model.cuda(args.gpu)
+        model_clip.cuda(args.gpu)
         img2text.cuda(args.gpu)
         if args.precision == "fp16":
             convert_weights(model)
+            convert_weights(model_clip)
             convert_weights(img2text)
         # Previously batch size and workers were global and not per GPU.
         # args.batch_size = args.batch_size / ngpus_per_node)
@@ -112,15 +123,21 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
 
         if args.distributed and args.use_bn_sync:
             model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+            model_clip = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model_clip)
         if args.distributed:
             model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=model.has_extra)
+            model_clip = torch.nn.parallel.DistributedDataParallel(model_clip, 
+                device_ids=[args.gpu], 
+                find_unused_parameters=model.has_extra)
             img2text = torch.nn.parallel.DistributedDataParallel(img2text, device_ids=[args.gpu], find_unused_parameters=False)
         if args.dp:
             model = torch.nn.DataParallel(model, device_ids=args.multigpu)
+            model_clip = torch.nn.DataParallel(model_clip, device_ids=args.multigpu)
             img2text = torch.nn.DataParallel(img2text, device_ids=args.multigpu)
 
         if args.precision == "fp16":
             convert_weights(model)
+            convert_weights(model_clip)
             convert_weights(img2text)
 
     # data = get_data(args, (preprocess_train, preprocess_val))
@@ -198,7 +215,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
         pin_memory=True,
         drop_last=False,
     )
-    visualize_results(model, img2text, args, prompt, dataloader, )
+    visualize_results(model, model_clip, img2text, args, prompt, dataloader, )
         
 
 def main(args):
