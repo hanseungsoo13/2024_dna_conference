@@ -124,9 +124,9 @@ def get_text_features_only_caption(model, texts, args):
 def get_loss_img2text(model, img2text, images, texts, alphas, loss_img, loss_txt, args, memory=None):
     with torch.no_grad():
         image_features, _ = model.visual(images, alphas, return_attn=True)
-    token_features = img2text(image_features.unsqueeze(1)) #qformer를 위해 unsqueeze 추가!!
-    # text_features = get_text_features(model, token_features, args)  # default option
-    text_features = get_text_features_add_caption(model, token_features, texts, args)
+    token_features = img2text(image_features) #qformer를 위해 unsqueeze 추가!!
+    text_features = get_text_features(model, token_features, args)  # default option
+    # text_features = get_text_features_add_caption(model, token_features, texts, args)
     # text_features = get_text_features_alpha(model, texts, token_features, args)
     image_features = image_features / image_features.norm(dim=-1, keepdim=True)
     text_features = text_features / text_features.norm(dim=-1, keepdim=True)   

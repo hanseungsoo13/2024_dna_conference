@@ -18,25 +18,27 @@ from model.clip import _transform, load
 from model.model import convert_weights, IM2TEXT, FiLMedIM2TEXT, IM_TRANSFORMER
 from params import parse_args_from_yaml
 from utils import convert_models_to_fp32
+from data import get_data
+from third_party.open_clip.clip import tokenize
 
 def load_model_alphaclip(args):
     model, preprocess_val = alpha_clip.load("ViT-L/14", device=args.gpu, 
                                         alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
                                         lora_adapt=False, rank=-1)
     
-    img2text = IM2TEXT(embed_dim=model.embed_dim, 
-                       middle_dim=args.middle_dim, 
-                       output_dim=model.token_embedding.weight.shape[1],
-                       n_layer=args.n_layer)
+    # img2text = IM2TEXT(embed_dim=model.embed_dim, 
+    #                    middle_dim=args.middle_dim, 
+    #                    output_dim=model.token_embedding.weight.shape[1],
+    #                    n_layer=args.n_layer)
 
     # img2text = FiLMedIM2TEXT(embed_dim=model.embed_dim, 
     #                         middle_dim=args.middle_dim, 
     #                         output_dim=model.token_embedding.weight.shape[1],
     #                         n_layer=args.n_layer) 
 
-    # img2text = IM_TRANSFORMER(num_query_token=1,
-    #                         cross_attention_freq=2,
-    #                         embed_dim=model.token_embedding.weight.shape[1])
+    img2text = IM_TRANSFORMER(num_query_token=1,
+                            cross_attention_freq=2,
+                            embed_dim=model.token_embedding.weight.shape[1])
 
     if args.precision == "amp" or args.precision == "fp32" or args.gpu is None:
         convert_models_to_fp32(model)
@@ -217,8 +219,8 @@ def plot_similarity_heatmap(similarity_matrix, class_list, metric_name="Cosine S
                 annot=True,
                 fmt='.3f',
                 cmap='YlOrRd',
-                vmin=-0.1,  # 최소값을 -0.1로 설정
-                vmax=0.1)   # 최대값을 0.1로 설정
+                vmin=0.5,  # 최소값을 -0.1로 설정
+                vmax=0.8)   # 최대값을 0.1로 설정
     plt.title(f'{metric_name} Heatmap between Classes')
     plt.xlabel('Classes')
     plt.ylabel('Classes')
@@ -226,6 +228,84 @@ def plot_similarity_heatmap(similarity_matrix, class_list, metric_name="Cosine S
     plt.tight_layout()
     plt.savefig(f'QFormer_30_similarity_heatmap_{metric_name.lower().replace(" ", "_")}.png')
     plt.close()
+
+def load_dataset(args, preprocess_val):
+    data = get_data(args, (preprocess_val, preprocess_val))
+    return data['train'].dataloader
+
+def get_text_features(model, token_features, args):
+    text = tokenize("a photo of")
+    text = text.cuda(args.gpu, non_blocking=True)
+    text = text.view(1, -1)
+    text = text.repeat(token_features.size(0), 1)
+    text_features = model.encode_text_img(text, token_features)
+    return text_features
+
+def process_ex(args, 
+               model, 
+               dino_model, 
+               dino_processor, 
+               sam_model, 
+               sam_processor, 
+               preprocess_val, 
+               mask_transform, 
+               img2text,
+               ):
+    class_list = ['cat', 'dog', 'elephant', 'wolf', 'human', 'potato', 'dress', 'laptop', 'tree']
+    num_classes = len(class_list)
+    
+    # Initialize similarity matrices
+    cosine_similarity_matrix = np.zeros((num_classes, num_classes))
+    
+    # Get class embeddings
+    token_text = alpha_clip.tokenize([f'a photo of {i}' for i in class_list])
+    token_text = token_text.cuda(args.gpu, non_blocking=True)
+    class_features = model.encode_text(token_text)
+
+    # Process each image and compute similarities
+    for i, image_class in enumerate(class_list):
+        images = Image.open(f"/home/work/gisub_conference/2024_dna_conference/test_images/ori_images/{image_class}.jpg")
+        texts = f"A {image_class}."
+
+        input_boxes = dino_process(images, texts, dino_model, dino_processor)
+        image_maskes = sam_process(images, input_boxes, sam_model, sam_processor)
+
+        images = preprocess_val(images).to('cuda')
+        image_maskes = preprocess_val.transforms[0](image_maskes)
+        image_maskes = preprocess_val.transforms[1](image_maskes)
+        image_maskes = np.array(image_maskes)
+
+        binary_maskes = (image_maskes[0, :, :] != 0)
+        alphas = mask_transform((binary_maskes * 255).astype(np.uint8))
+
+        images = images.cuda(args.gpu, non_blocking=True)
+        alphas = alphas.cuda(args.gpu, non_blocking=True)
+        images = images.unsqueeze(0)
+        alphas = alphas.unsqueeze(0)
+
+        image_features, _ = model.visual(images, alphas, return_attn=True)
+        # image_features = model.encode_image(images)
+        token_features = img2text(image_features.unsqueeze(1))  # .unsqueeze(1)  (QFormer)
+        text_features = get_text_features(model, token_features, args)
+
+        # Compute similarities
+        for j, class_embedding in enumerate(class_features):
+            similarity = cosine_sim(text_features.squeeze(0), class_embedding)
+            # similarity = euclidean_dis(image_embedding, class_embedding)
+            cosine_similarity_matrix[i, j] = similarity
+            print(f'Image {image_class} : text {class_list[j]} = {similarity}')
+        print('-' * 50)
+    
+    return cosine_similarity_matrix, class_list
+
+def process_imgnet():
+    class_list = ['n01484850', 'n01518878', 'n04310018', 'n02129165', 'n03888257', 
+                  'n02701002', 'n02951358', 'n03481172', 'n07753592', 'n09472597']
+    num_classes = len(class_list)
+    
+    # Initialize similarity matrices
+    cosine_similarity_matrix = np.zeros((num_classes, num_classes))
+
 
 if __name__ == "__main__":
     config_path = "./configs/projection_module_alphaclip.yml"
@@ -244,57 +324,9 @@ if __name__ == "__main__":
             torchvision.transforms.Normalize(0.5, 0.26)
         ])
 
-    class_list = ['cat', 'dog', 'elephant', 'wolf', 'human', 'potato', 'dress', 'laptop', 'tree']
-    num_classes = len(class_list)
-    
-    # Initialize similarity matrices
-    cosine_similarity_matrix = np.zeros((num_classes, num_classes))
-    
-    # Get class embeddings
-    token_text = alpha_clip.tokenize([f'a photo of {i}.' for i in class_list])
-    token_text = token_text.cuda(args.gpu, non_blocking=True)
-    text_embedding = model.token_embedding(token_text)
-    
-    class_embedding_list = []
-    for embedding_per_class in text_embedding:
-        class_embedding = embedding_per_class[4]
-        class_embedding_list.append(class_embedding)
+    cosine_similarity_matrix, class_list = process_ex(args, model, dino_model, dino_processor, sam_model, 
+                                                      sam_processor, preprocess_val, mask_transform, img2text)
 
-    # Process each image and compute similarities
-    image_embeddings = []
-    for i, image_class in enumerate(class_list):
-        images = Image.open(f"/home/work/gisub_conference/2024_dna_conference/test_images/{image_class}.jpg")
-        texts = f"A {image_class}."
-
-        input_boxes = dino_process(images, texts, dino_model, dino_processor)
-        image_maskes = sam_process(images, input_boxes, sam_model, sam_processor)
-
-        images = preprocess_val(images).to('cuda')
-        image_maskes = preprocess_val.transforms[0](image_maskes)
-        image_maskes = preprocess_val.transforms[1](image_maskes)
-        image_maskes = np.array(image_maskes)
-
-        binary_maskes = (image_maskes[:, :, 0] == 255)
-        alphas = mask_transform((binary_maskes * 255).astype(np.uint8))
-
-        images = images.cuda(args.gpu, non_blocking=True)
-        alphas = alphas.cuda(args.gpu, non_blocking=True)
-        images = images.unsqueeze(0)
-        alphas = alphas.unsqueeze(0)
-
-        image_features, _ = model.visual(images, alphas, return_attn=True)
-        # image_features = model.encode_image(images)
-        image_features_query = img2text(image_features)
-        image_embedding = image_features_query[0]
-        image_embeddings.append(image_embedding)
-
-        # Compute similarities
-        for j, class_embedding in enumerate(class_embedding_list):
-            similarity = cosine_sim(image_embedding, class_embedding)
-            # similarity = euclidean_dis(image_embedding, class_embedding)
-            cosine_similarity_matrix[i, j] = similarity
-            print(f'Image {image_class} : text {class_list[j]} = {similarity}')
-        print('-' * 50)
 
     # Plot heatmaps
     plot_similarity_heatmap(cosine_similarity_matrix, class_list, "Cosine Similarity")

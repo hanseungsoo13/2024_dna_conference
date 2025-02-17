@@ -53,12 +53,19 @@ class SegmentImage():
     def transform(self, image_path, text):
         image = Image.open(image_path)
 
-        input_boxes = self.dino_process(image, text)
-        image_maskes = self.sam_process(image, input_boxes)
+        if len(np.array(image).shape) != 3:
+            image = image.convert('RGB')
 
-        image_maskes = np.array(image_maskes)
+        try:
+            input_boxes = self.dino_process(image, text)
+            image_maskes = self.sam_process(image, input_boxes)
 
-        binary_maskes = (image_maskes[0, :, :] == 1)
+            image_maskes = np.array(image_maskes)
+            binary_maskes = (image_maskes[0, :, :] != 0)
+        
+        except:
+            binary_maskes = np.ones(np.array(image).shape[1:], dtype=np.array(image).dtype)
+            
         alphas = self.mask_transform((binary_maskes * 255).astype(np.uint8))
 
         return alphas
@@ -549,7 +556,7 @@ def evaluate_cirr_test(model, img2text, args, query_loader, target_loader):
     return res_all
 
 
-def evaluate_fashion(model, img2text, args, source_loader, target_loader):
+def evaluate_fashion(model, model_clip, img2text, args, source_loader, target_loader):
     if not is_master(args):
         return
     model.eval()
@@ -564,6 +571,7 @@ def evaluate_fashion(model, img2text, args, source_loader, target_loader):
     all_reference_names = []
     all_captions = []     
     m = model.module if args.distributed or args.dp else model
+    m_c = model_clip.module if args.distributed or args.dp else model_clip
     logit_scale = m.logit_scale.exp()
     logit_scale = logit_scale.mean() 
 
@@ -572,7 +580,7 @@ def evaluate_fashion(model, img2text, args, source_loader, target_loader):
             target_images, target_paths = batch
             if args.gpu is not None:
                 target_images = target_images.cuda(args.gpu, non_blocking=True)
-            image_features = m.encode_image(target_images)
+            image_features = m_c.encode_image(target_images)
             image_features = image_features / image_features.norm(dim=-1, keepdim=True)
             all_image_features.append(image_features)
             for path in target_paths:
@@ -580,23 +588,24 @@ def evaluate_fashion(model, img2text, args, source_loader, target_loader):
 
     with torch.no_grad():
         for batch in tqdm(source_loader):
-            ref_images, target_images, target_caption, caption_only, answer_paths, ref_names, captions = batch
+            ref_images, ref_alphas, target_images, target_caption, caption_only, answer_paths, ref_names, captions = batch
             for path in answer_paths:
                 all_answer_paths.append(path)
             all_reference_names.extend(ref_names)
             all_captions.extend(captions)
             if args.gpu is not None:
                 ref_images = ref_images.cuda(args.gpu, non_blocking=True)
+                ref_alphas = ref_alphas.cuda(args.gpu, non_blocking=True)
                 target_images = target_images.cuda(args.gpu, non_blocking=True)
                 target_caption = target_caption.cuda(args.gpu, non_blocking=True)
                 caption_only = caption_only.cuda(args.gpu, non_blocking=True)
-            image_features = m.encode_image(target_images)
-            query_image_features = m.encode_image(ref_images)
+            # image_features = m.encode_image(target_images)
+            query_image_features, _ = m.visual(ref_images, ref_alphas, return_attn=True)
             id_split = tokenize(["*"])[0][1]            
             caption_features = m.encode_text(target_caption)                            
-            query_image_tokens = img2text(query_image_features)          
+            query_image_tokens = img2text(query_image_features.unsqueeze(1))  # for QFormer          
             composed_feature = m.encode_text_img_retrieval(target_caption, query_image_tokens, split_ind=id_split, repeat=False)
-            image_features = image_features / image_features.norm(dim=-1, keepdim=True)            
+            # image_features = image_features / image_features.norm(dim=-1, keepdim=True)            
             caption_features = caption_features / caption_features.norm(dim=-1, keepdim=True)                       
             query_image_features = query_image_features / query_image_features.norm(dim=-1, keepdim=True)   
             mixture_features = query_image_features + caption_features

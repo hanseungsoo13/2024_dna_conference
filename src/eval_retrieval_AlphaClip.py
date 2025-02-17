@@ -47,7 +47,7 @@ from utils import is_master, convert_models_to_fp32, TargetPad
 import model.alpha_clip as alpha_clip
 
 def load_model(args):
-    model, preprocess_val = alpha_clip.load("ViT-L/14", device='cpu', 
+    model, preprocess_val = alpha_clip.load("ViT-L/14", device=args.gpu, 
                                         alpha_vision_ckpt_pth="./checkpoints/clip_l14_grit+mim_fultune_6xe.pth", 
                                         lora_adapt=False, rank=-1)
     
@@ -288,7 +288,7 @@ def main_worker(gpu, ngpus_per_node, log_queue, args):
             num_workers=args.workers,
             pin_memory=True,
             drop_last=False)
-        evaluate_fashion(model, img2text, args, source_dataloader, target_dataloader)
+        evaluate_fashion(model, model_clip, img2text, args, source_dataloader, target_dataloader)
     elif args.eval_mode == 'imgnet':
         domains = ['cartoon', 'origami', 'toy', 'sculpture']
         prompt = ["a {} of *".format(domain) for domain in domains]
@@ -352,7 +352,7 @@ def main(args):
         subprocess.check_call(command)
         return 1
 
-    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_new_mask_out.log")
+    args.log_path = os.path.join(args.logs, args.name, f"{args.eval_mode}_out.log")
     if os.path.exists(args.log_path) and args.resume is None:
         print(
             "Error. Experiment already exists. Use --name {} to specify a new experiment."

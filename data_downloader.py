@@ -21,8 +21,8 @@ def process_data(json_file):
         y_max = chunk[5] * height
         box = (x_min, y_min, x_max, y_max)
         noun = caption[int(chunk[0]):int(chunk[1])]
-        caption_exp_noun = caption[:int(chunk[0])] + ' <tok> ' + caption[int(chunk[1])+1:]
-        results.append([image, box, noun, caption_exp_noun])
+        # caption_exp_noun = caption[:int(chunk[0])] + ' <tok> ' + caption[int(chunk[1])+1:]
+        results.append([image, box, noun, caption])
     
     return results
 
@@ -73,6 +73,6 @@ test_data = remaining_data.drop(valid_data.index)
 
 print('Start saving data...')
 
-train_data.to_csv('./cc/GRIT_caption_train_data.csv', sep='|', index=False)
-valid_data.to_csv('./cc/GRIT_caption_valid_data.csv', sep='|', index=False)
-test_data.to_csv('./cc/GRIT_caption_test_data.csv', sep='|', index=False)
+train_data.to_csv('./cc/GRIT_caption_train_data_v2.csv', sep='|', index=False)
+valid_data.to_csv('./cc/GRIT_caption_valid_data_v2.csv', sep='|', index=False)
+test_data.to_csv('./cc/GRIT_caption_test_data_v2.csv', sep='|', index=False)
