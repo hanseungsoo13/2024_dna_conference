@@ -37,7 +37,7 @@ import torchvision
 
 class SegmentImage():
     def __init__(self):
-        self.device = "cuda:1"
+        self.device = "cuda"
         self.dino_model, self.dino_processor = self.get_dino()
         self.sam_model, self.sam_processor = self.get_sam()
 

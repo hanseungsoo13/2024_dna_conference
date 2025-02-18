@@ -28,7 +28,7 @@ def main(args):
     new_data = []
 
     for batch in tqdm(dataloader):
-        images, texts, alphas, urls, nouns = batch['image'], batch['caption'], batch['mask'], batch['url'], batch['noun']
+        images, texts, alphas, urls, nouns = batch[0], batch[1], batch[2], batch[3], batch[4]
         images = images.cuda(args.gpu, non_blocking=True)
         alphas = alphas.cuda(args.gpu, non_blocking=True)
 
@@ -46,8 +46,20 @@ def main(args):
     new_csv = pd.DataFrame(new_data, columns=['url', 'noun', 'caption'])
     new_csv.to_csv('cc/GRIT_features_train_data.csv', index=False, sep='|')
 
+def test(args):
+    data = pd.read_csv('cc/GRIT_caption_train_data_v3.csv', sep='|')
+    new_data = []
+    for url, boxes, noun, caption in zip(data['url'], data['boxes'], data['noun'], data['caption']):
+        new_url = url.replace('images', 'image_features').replace('jpg', 'npy')
+        if not os.path.exists(new_url):
+            new_data.append([url, boxes, noun, caption])
+    
+    new_csv = pd.DataFrame(new_data, columns=['url', 'boxes', 'noun', 'caption'])
+    new_csv.to_csv('cc/GRIT_extract_train_data.csv', index=False, sep='|')
+
 
 if __name__ == "__main__":
     config_path = "./configs/train_alphaclip.yml"
     args = parse_args_from_yaml(config_path)
     main(args)
+    # test(args)

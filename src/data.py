@@ -51,6 +51,14 @@ import PIL
 
 from imgnet_classes import IMAGENET2012_CLASSES
 
+from eval_utils import SegmentImage
+
+import sys
+sys.path.append("/home/gisub/Desktop/2024_dna_conference/sam2")
+
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
+
 
 ## Structure of dataset directory
 ## CIRR: under ./data/CIRR
@@ -430,8 +438,14 @@ class GRITDataset(Dataset):
         self.transforms = transforms
 
         self.device = 'cuda'
-        self.sam_model = SamModel.from_pretrained("facebook/sam-vit-base").to(self.device)
-        self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+        # self.sam_model = SamModel.from_pretrained("facebook/sam-vit-base").to(self.device)
+        # self.sam_processor = SamProcessor.from_pretrained("facebook/sam-vit-base")
+
+        self.checkpoint = "checkpoints/sam2.1_hiera_large.pt"
+        self.model_cfg = "configs/sam2.1/sam2.1_hiera_l.yaml"
+        self.sam_model = build_sam2(self.model_cfg, self.checkpoint)
+        self.sam_model.to(self.device)
+        self.sam_processor = SAM2ImagePredictor(self.sam_model)
 
         self.mask_transform = torchvision.transforms.Compose([
             torchvision.transforms.ToTensor(), 
@@ -453,7 +467,7 @@ class GRITDataset(Dataset):
         
         caption = data['caption']
         boxes = [[[float(i) for i in data['boxes'][1:-1].split(',')]]]
-        mask = self.get_masks(image, boxes, self.sam_processor, self.sam_model, self.device)
+        mask = self.get_masks(image, boxes)
 
         image = self.transforms(image).to(self.device)
 
@@ -464,28 +478,58 @@ class GRITDataset(Dataset):
         binary_maskes = (mask[0, :, :] != 0)
         alpha = self.mask_transform((binary_maskes * 255).astype(np.uint8))
 
-        return image, caption, alpha
-
-
-    def get_masks(self, image, boxes, sam_processor, sam_model, device):
-        inputs = sam_processor(image, input_boxes=boxes, return_tensors="pt").to(device)
-        with torch.no_grad():
-            outputs = sam_model(**inputs)
-
-        masks = sam_processor.image_processor.post_process_masks(
-            outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu()
-        )
-
-        combined_mask = None
-        for mask in masks[0]:
-            new_mask = mask.float()
-            if combined_mask is None:
-                combined_mask = new_mask
-            else:
-                combined_mask = np.maximum(combined_mask, new_mask)
-
-        return combined_mask
+        return image, caption, alpha, data['url'], data['noun']
     
+
+    def get_masks(self, image, boxes):
+        with torch.inference_mode():
+            self.sam_processor.set_image(image)
+            masks, scores, _ = self.sam_processor.predict(
+                point_coords=None,
+                point_labels=None,
+                box=boxes,
+                multimask_output=False,
+                )
+        
+        return torch.tensor(masks)
+
+
+    # def get_masks(self, image, boxes, sam_processor, sam_model, device):
+    #     inputs = sam_processor(image, input_boxes=boxes, return_tensors="pt").to(device)
+    #     with torch.no_grad():
+    #         outputs = sam_model(**inputs)
+
+    #     masks = sam_processor.image_processor.post_process_masks(
+    #         outputs.pred_masks.cpu(), inputs["original_sizes"].cpu(), inputs["reshaped_input_sizes"].cpu()
+    #     )
+
+    #     combined_mask = None
+    #     for mask in masks[0]:
+    #         new_mask = mask.float()
+    #         if combined_mask is None:
+    #             combined_mask = new_mask
+    #         else:
+    #             combined_mask = np.maximum(combined_mask, new_mask)
+
+    #     return combined_mask
+
+
+class FeatDataset(Dataset):
+    def __init__(self, input_filename):
+        self.dataset = pd.read_csv(input_filename, sep='|')
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        data = self.dataset.iloc[idx]
+        try:
+            image_features = torch.tensor(np.load(data['url']))
+        except:
+            return None
+
+        return image_features, data['noun'], data['caption']
+
 
 class AlphaDataset(Dataset):
     def __init__(self, input_filename, transforms, img_key, caption_key, sep="\t",
@@ -716,6 +760,32 @@ def get_alpha_dataset(args, preprocess_fn, is_train, input_filename=None):
     return DataInfo(dataloader, sampler)
 
 
+def get_feat_dataset(args, preprocess_fn, is_train, input_filename=None):
+    if input_filename is None:
+        input_filename = args.train_data if is_train else args.val_data
+    assert input_filename
+    dataset = FeatDataset(input_filename=input_filename)
+        
+    num_samples = len(dataset)
+    sampler = DistributedSampler(dataset) if args.distributed and is_train else None
+    shuffle = is_train and sampler is None
+
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=shuffle,
+        num_workers=args.workers,
+        # pin_memory=True,
+        sampler=sampler,
+        drop_last=is_train,
+        collate_fn=collate_fn_skip_none,
+    )
+    dataloader.num_samples = num_samples
+    dataloader.num_batches = len(dataloader)
+
+    return DataInfo(dataloader, sampler)
+
+
 def collate_fn_skip_none(batch):
     # None 값을 필터링하여 배치 생성
     batch = [item for item in batch if item is not None]
@@ -816,6 +886,8 @@ def get_dataset_fn(data_path, dataset_type):
         return get_alpha_dataset 
     elif dataset_type == 'grit':
         return get_grit_dataset
+    elif dataset_type == 'feat':
+        return get_feat_dataset
     elif dataset_type == "auto":
         ext = data_path.split('.')[-1]
         if ext in ['csv', 'tsv']:
